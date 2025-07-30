@@ -71,7 +71,7 @@ You'll need to run both the server and client in separate terminal windows:
 **Terminal 1 - Start the Server:**
 ```bash
 cd server
-npm run dev
+node server.js
 ```
 
 The server will start on `http://localhost:5001`
@@ -115,28 +115,6 @@ iquit/
 │   └── package.json       # Backend dependencies
 └── README.md              # This file
 ```
-
-## 🔧 Development
-
-### Available Scripts
-
-**Client (in `client/` directory):**
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
-- `npm run lint` - Run ESLint
-
-**Server (in `server/` directory):**
-- `npm run dev` - Start development server with nodemon
-- `npm start` - Start production server
-
-### Environment Variables
-
-The application currently uses default localhost URLs. For production deployment, you may need to configure:
-
-- Server port (default: 5001)
-- Client server URL (default: http://localhost:5001)
-- CORS origins
 
 ## 🤝 Contributing
 
@@ -237,7 +215,3 @@ If you need help or have questions:
 1. Check the existing issues for similar problems
 2. Create a new issue with your question
 3. Join our community discussions
-
----
-
-**Happy Gaming! 🎮** 
