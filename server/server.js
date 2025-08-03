@@ -401,7 +401,50 @@ io.on('connection', (socket) => {
       }
     };
     
+    console.log('[DEBUG] Server sending quit_reveal data:', quit_reveal_data);
     io.to(room).emit('quit_reveal', quit_reveal_data);
+
+    // --- NEW: Setup reveal order for manual reveal phase ---
+    r.reveal_phase = {
+      non_quitters: r.players.filter(p => p.id !== player.id).map(p => p.id),
+      current_index: 0,
+      in_progress: true
+    };
+    if (r.reveal_phase.non_quitters.length > 0) {
+      io.to(room).emit('next_revealing_player', {
+        player_id: r.reveal_phase.non_quitters[0]
+      });
+    } else {
+      io.to(room).emit('reveal_complete');
+      r.reveal_phase.in_progress = false;
+    }
+  });
+
+  // --- NEW: Handle finished_revealing event ---
+  socket.on('finished_revealing', (data) => {
+    console.log('[DEBUG] finished_revealing event received:', data);
+    const { room } = data;
+    const r = rooms[room];
+    if (!r || !r.reveal_phase || !r.reveal_phase.in_progress) {
+      console.log('[DEBUG] Invalid reveal phase state:', { 
+        room: !!r, 
+        reveal_phase: !!r?.reveal_phase, 
+        in_progress: r?.reveal_phase?.in_progress 
+      });
+      return;
+    }
+    console.log('[DEBUG] Current reveal phase:', r.reveal_phase);
+    r.reveal_phase.current_index++;
+    console.log('[DEBUG] Updated current_index to:', r.reveal_phase.current_index);
+    if (r.reveal_phase.current_index < r.reveal_phase.non_quitters.length) {
+      const nextId = r.reveal_phase.non_quitters[r.reveal_phase.current_index];
+      console.log('[DEBUG] Emitting next_revealing_player for:', nextId);
+      io.to(room).emit('next_revealing_player', { player_id: nextId });
+    } else {
+      console.log('[DEBUG] All players revealed, emitting reveal_complete');
+      io.to(room).emit('reveal_complete');
+      r.reveal_phase.in_progress = false;
+    }
   });
 
   // Reveal card during quit phase
@@ -441,6 +484,7 @@ io.on('connection', (socket) => {
     }
     
     console.log('Starting next round...');
+    console.log('Current players:', r.players.map(p => ({ name: p.name, id: p.id, hand: p.hand?.length })));
     
     // Reset game state for new round
     r.deck = shuffledDeck();
@@ -458,9 +502,11 @@ io.on('connection', (socket) => {
       for (let i = 0; i < 5; i++) {
         player.hand.push(r.deck.pop());
       }
+      console.log(`Dealt ${player.hand.length} cards to ${player.name}:`, player.hand);
     });
     
     console.log('Emitting room_state and next_round_started');
+    console.log('Updated players:', r.players.map(p => ({ name: p.name, id: p.id, hand: p.hand?.length })));
     io.to(room).emit('room_state', addHostProperty(r));
     io.to(room).emit('next_round_started');
   });

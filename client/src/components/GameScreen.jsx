@@ -26,30 +26,72 @@ const GameScreen = ({
   quitData = null,
   onRevealCard = null,
   onStartNextRound = null,
+  revealedCards = {},
+  currentRevealingPlayerId = null,
+  revealComplete = false,
+  onFinishRevealing = null,
 }) => {
   const [showChat, setShowChat] = useState(false);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
-  const [quitPhase, setQuitPhase] = useState(null); // 'iquit-text', 'revealing', 'complete'
+  const [quitPhase, setQuitPhase] = useState(null); // 'iquit-text', 'quit-reveal', 'revealing', 'complete'
   const [currentRevealingPlayer, setCurrentRevealingPlayer] = useState(null);
-  const [revealedCards, setRevealedCards] = useState({});
   const [roundScores, setRoundScores] = useState({});
   const [autoRevealIndex, setAutoRevealIndex] = useState(0);
   const [sortedCards, setSortedCards] = useState({});
   const [countdown, setCountdown] = useState(3);
+  const [revealedPlayers, setRevealedPlayers] = useState(new Set());
+  
+  // New state variables for manual card revelation
+  const [manualRevealMode, setManualRevealMode] = useState(false);
+  const [playerTimeout, setPlayerTimeout] = useState(null);
+  const [timeoutSeconds, setTimeoutSeconds] = useState(30); // 30 seconds timeout
+  const [isCurrentPlayerTurn, setIsCurrentPlayerTurn] = useState(false);
+  const [quitPlayerRevealed, setQuitPlayerRevealed] = useState(false);
+  const [playerScores, setPlayerScores] = useState({});
 
   // Debug modal state
   useEffect(() => {
     console.log("showDiscardModal changed to:", showDiscardModal);
   }, [showDiscardModal]);
 
+  // Track quitData changes
+  useEffect(() => {
+    console.log("quitData changed:", quitData ? 'present' : 'null', 'quitPhase:', quitPhase);
+    if (!quitData && quitPhase) {
+      console.log("Clearing quit phase state");
+      setQuitPhase(null);
+      setCurrentRevealingPlayer(null);
+      setRoundScores({});
+      setAutoRevealIndex(0);
+      setSortedCards({});
+      setRevealedPlayers(new Set());
+      // Clear manual revelation state
+      setManualRevealMode(false);
+      setPlayerTimeout(null);
+      setTimeoutSeconds(30);
+      setIsCurrentPlayerTurn(false);
+      setQuitPlayerRevealed(false);
+      setPlayerScores({});
+    }
+  }, [quitData, quitPhase]);
+
   // Handle quit data changes
   useEffect(() => {
     if (quitData) {
+      console.log('Quit data received, starting quit phase');
       setQuitPhase('iquit-text');
-      setRevealedCards({});
       setRoundScores({});
       setAutoRevealIndex(0);
       setCountdown(3);
+      setRevealedPlayers(new Set());
+      // Initialize manual revelation state
+      setManualRevealMode(false);
+      setPlayerTimeout(null);
+      setTimeoutSeconds(30);
+      setIsCurrentPlayerTurn(false);
+      setQuitPlayerRevealed(false);
+      setPlayerScores({});
+      console.log('Countdown reset to 3');
       
       // Sort cards for each player in the correct order
       const sorted = {};
@@ -73,68 +115,151 @@ const GameScreen = ({
       
       // Start the revelation process after IQUIT text fades
       setTimeout(() => {
-        setQuitPhase('revealing');
-        // Start with the first player who is not the quit player
-        const initialQuitPlayerIndex = quitData.all_players.findIndex(p => p.id === quitData.quitPlayer.id);
-        const initialNextPlayerIndex = (initialQuitPlayerIndex + 1) % quitData.all_players.length;
-        setCurrentRevealingPlayer(quitData.all_players[initialNextPlayerIndex]);
+        setQuitPhase('quit-reveal');
+        // First, auto-reveal the quit player's cards
+        console.log('Starting quit player reveal:', quitData.quitPlayer.name);
       }, 2000); // 1s fade in + 1s fade out
     }
   }, [quitData, players]);
 
-  // Auto-reveal cards
+  // Auto-reveal quit player's cards first
   useEffect(() => {
-    if (quitPhase === 'revealing' && currentRevealingPlayer && sortedCards[currentRevealingPlayer.id]) {
-      const playerCards = sortedCards[currentRevealingPlayer.id];
+    if (quitPhase === 'quit-reveal' && quitData?.quitPlayer) {
+      const playerCards = quitData.all_players.find(p => p.id === quitData.quitPlayer.id)?.hand || [];
       
       if (autoRevealIndex < playerCards.length) {
         const timer = setTimeout(() => {
           // Reveal the next card
-          if (!revealedCards[currentRevealingPlayer.id]) {
-            revealedCards[currentRevealingPlayer.id] = [];
+          if (!revealedCards[quitData.quitPlayer.id]?.includes(autoRevealIndex)) {
+            // For quit player auto-reveal, we need to emit the event to server
+            if (onRevealCard) {
+              onRevealCard(quitData.quitPlayer.id, autoRevealIndex);
+            }
           }
-          revealedCards[currentRevealingPlayer.id].push(autoRevealIndex);
-          setRevealedCards({...revealedCards});
           setAutoRevealIndex(autoRevealIndex + 1);
         }, 800); // Reveal a card every 800ms
         
         return () => clearTimeout(timer);
       } else {
-        // All cards revealed for current player, move to next
+        // All quit player cards revealed, calculate score and move to next phase
         setTimeout(() => {
-          const currentIndex = quitData.all_players.findIndex(p => p.id === currentRevealingPlayer.id);
-          let nextPlayerIndex = (currentIndex + 1) % quitData.all_players.length;
+          // Calculate quit player's score
+          const quitPlayerCards = quitData.all_players.find(p => p.id === quitData.quitPlayer.id)?.hand || [];
+          console.log('[DEBUG] Calculating quit player score for:', quitData.quitPlayer.name, 'Cards:', quitPlayerCards);
           
-          // Skip the quit player
-          while (quitData.all_players[nextPlayerIndex].id === quitData.quitPlayer.id) {
-            nextPlayerIndex = (nextPlayerIndex + 1) % quitData.all_players.length;
-          }
+          const quitPlayerScore = quitPlayerCards.reduce((total, card) => {
+            if (card.rank === 'J') return total + 0;
+            if (card.rank === 'K') return total + 13;
+            if (card.rank === 'Q') return total + 12;
+            if (card.rank === 'A') return total + 1;
+            return total + (parseInt(card.rank) || 0);
+          }, 0);
           
-          const nextPlayer = quitData.all_players[nextPlayerIndex];
+          console.log('[DEBUG] Quit player score calculated:', quitPlayerScore);
+          setPlayerScores(prev => ({ ...prev, [quitData.quitPlayer.id]: quitPlayerScore }));
+          setQuitPlayerRevealed(true);
           
-          // If we've gone through all non-quit players, complete the round
-          if (nextPlayer.id === currentRevealingPlayer.id) {
-            setQuitPhase('complete');
-          } else {
-            setCurrentRevealingPlayer(nextPlayer);
-            setAutoRevealIndex(0);
-          }
-        }, 1000); // Wait 1 second before moving to next player
+          // Move to manual revelation phase for non-quit players
+          setQuitPhase('revealing');
+          // Server will control the revealing order via currentRevealingPlayerId
+          console.log('Quit player revealed, waiting for server to start manual reveal phase');
+        }, 1000);
       }
     }
-  }, [quitPhase, currentRevealingPlayer, autoRevealIndex, sortedCards, revealedCards, players, quitData]);
+  }, [quitPhase, quitData, autoRevealIndex, sortedCards, revealedCards, onRevealCard]);
+
+  // Manual/Auto-reveal cards with timeout system for non-quit players
+  useEffect(() => {
+    if (quitPhase === 'revealing' && currentRevealingPlayerId && quitPlayerRevealed) {
+      const currentRevealingPlayer = players.find(p => p.id === currentRevealingPlayerId);
+      if (!currentRevealingPlayer) return;
+      
+      const playerCards = quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || [];
+      const isCurrentPlayer = currentRevealingPlayerId === currentPlayer?.id;
+      
+      // Check if current player is the one revealing
+      setIsCurrentPlayerTurn(isCurrentPlayer);
+      
+      // Only start timeout for current player if not in manual mode
+      if (isCurrentPlayer && !manualRevealMode && !playerTimeout) {
+        console.log('Starting timeout for current player:', currentRevealingPlayer.name);
+        const timeout = setTimeout(() => {
+          console.log('Timeout reached, auto-revealing remaining cards');
+          setManualRevealMode(true);
+        }, 30000); // Use fixed 30 seconds instead of timeoutSeconds state
+        
+        setPlayerTimeout(timeout);
+        return () => clearTimeout(timeout);
+      }
+      
+      // Auto-reveal logic (only when manual mode is enabled for current player)
+      if (manualRevealMode && isCurrentPlayer) {
+        console.log('[DEBUG] Auto-reveal logic triggered:', {
+          manualRevealMode,
+          isCurrentPlayer,
+          playerCardsLength: playerCards.length,
+          revealedCardsCount: revealedCards[currentRevealingPlayerId]?.length
+        });
+        
+        // Find the next unrevealed card
+        const nextUnrevealedIndex = playerCards.findIndex((_, index) => 
+          !revealedCards[currentRevealingPlayerId]?.includes(index)
+        );
+        
+        console.log('[DEBUG] Next unrevealed index:', nextUnrevealedIndex);
+        
+        if (nextUnrevealedIndex !== -1) {
+          const timer = setTimeout(() => {
+            // Reveal the next unrevealed card
+            if (onRevealCard) {
+              console.log('[DEBUG] Auto-revealing card at index:', nextUnrevealedIndex);
+              onRevealCard(currentRevealingPlayerId, nextUnrevealedIndex);
+            }
+          }, 800); // Reveal a card every 800ms
+          
+          return () => clearTimeout(timer);
+        } else {
+          // All cards have been auto-revealed
+          console.log('[DEBUG] All cards auto-revealed for player:', currentRevealingPlayerId);
+          // Calculate and store the player's score
+          const playerCards = quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || [];
+          console.log('[DEBUG] Calculating auto-reveal score for player:', currentRevealingPlayerId, 'Cards:', playerCards);
+          
+          const playerScore = playerCards.reduce((total, card) => {
+            if (card.rank === 'J') return total + 0;
+            if (card.rank === 'K') return total + 13;
+            if (card.rank === 'Q') return total + 12;
+            if (card.rank === 'A') return total + 1;
+            return total + (parseInt(card.rank) || 0);
+          }, 0);
+          
+          console.log('[DEBUG] Auto-reveal player score calculated:', playerScore);
+          setPlayerScores(prev => ({ ...prev, [currentRevealingPlayerId]: playerScore }));
+        }
+      }
+    }
+  }, [quitPhase, currentRevealingPlayerId, revealedCards, players, quitData, manualRevealMode, playerTimeout, currentPlayer, quitPlayerRevealed, onRevealCard]);
+
+  // Monitor playerScores state for debugging
+  useEffect(() => {
+    console.log('[DEBUG] playerScores state updated:', playerScores);
+  }, [playerScores]);
 
   // Countdown and auto-start next round
   useEffect(() => {
     if (quitPhase === 'complete') {
+      console.log('Countdown effect triggered, countdown:', countdown);
       const timer = setTimeout(() => {
         if (countdown > 1) {
+          console.log('Decrementing countdown to:', countdown - 1);
           setCountdown(countdown - 1);
         } else {
           // Start next round automatically
           if (onStartNextRound) {
-            console.log('Auto-starting next round');
+            console.log('Auto-starting next round - calling onStartNextRound');
             onStartNextRound();
+          } else {
+            console.log('onStartNextRound function is null or undefined');
           }
         }
       }, 1000);
@@ -143,9 +268,157 @@ const GameScreen = ({
     }
   }, [quitPhase, countdown, onStartNextRound]);
 
+  // Timeout countdown for manual revelation
+  useEffect(() => {
+    if (quitPhase === 'revealing' && 
+        isCurrentPlayerTurn && 
+        !manualRevealMode && 
+        timeoutSeconds > 0) {
+      
+      const timer = setTimeout(() => {
+        setTimeoutSeconds(timeoutSeconds - 1);
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [quitPhase, isCurrentPlayerTurn, manualRevealMode, timeoutSeconds]);
+
+  // Call onFinishRevealing when current revealing player's cards are fully revealed
+  useEffect(() => {
+    const playerCards = quitData?.all_players?.find(p => p.id === currentRevealingPlayerId)?.hand || [];
+    console.log('[DEBUG] onFinishRevealing useEffect check:', {
+      quitData: !!quitData,
+      currentRevealingPlayerId,
+      currentPlayerId: currentPlayer?.id,
+      isCurrentPlayer: currentRevealingPlayerId === currentPlayer?.id,
+      revealedCardsCount: revealedCards[currentRevealingPlayerId]?.length,
+      totalCardsCount: playerCards.length,
+      shouldCall: quitData && currentRevealingPlayerId && currentRevealingPlayerId === currentPlayer?.id && revealedCards[currentRevealingPlayerId]?.length === playerCards.length
+    });
+    
+    if (
+      quitData &&
+      currentRevealingPlayerId &&
+      currentRevealingPlayerId === currentPlayer?.id &&
+      revealedCards[currentRevealingPlayerId]?.length === playerCards.length &&
+      onFinishRevealing
+    ) {
+      console.log('[DEBUG] Calling onFinishRevealing for player:', currentRevealingPlayerId);
+      // Add a longer delay so players can see the last card before moving to next player
+      setTimeout(() => {
+        onFinishRevealing();
+      }, 1500); // 1.5 seconds delay
+    }
+  }, [quitData, currentRevealingPlayerId, currentPlayer, revealedCards, onFinishRevealing]);
+
+  // Handle revealComplete state and transition to complete phase
+  useEffect(() => {
+    if (revealComplete && quitData) {
+      console.log('[DEBUG] revealComplete is true, transitioning to complete phase');
+      setQuitPhase('complete');
+      setCountdown(3); // Start 3-2-1 countdown
+    }
+  }, [revealComplete, quitData]);
+
+  // Always set quitPhase to 'revealing' and reset per-player state for each new currentRevealingPlayerId (except for the quitter's auto-reveal)
+  useEffect(() => {
+    console.log('[DEBUG] useEffect: currentRevealingPlayerId changed:', currentRevealingPlayerId, 'quitPhase:', quitPhase, 'client:', currentPlayer?.name);
+    if (
+      quitData &&
+      currentRevealingPlayerId &&
+      quitData.quitPlayer.id !== currentRevealingPlayerId
+    ) {
+      setQuitPhase('revealing');
+      setManualRevealMode(false);
+      setPlayerTimeout(null);
+      setTimeoutSeconds(30);
+      setIsCurrentPlayerTurn(currentRevealingPlayerId === currentPlayer?.id);
+      setAutoRevealIndex(0);
+    }
+  }, [quitData, currentRevealingPlayerId, currentPlayer]);
+
   const handleRevealCard = (playerId, cardIndex) => {
-    // This function is no longer used for manual reveals
-    console.log('Manual reveal disabled, using auto-reveal');
+    console.log('[DEBUG] handleRevealCard called:', {
+      playerId,
+      cardIndex,
+      quitPhase,
+      currentRevealingPlayerId,
+      currentPlayerId: currentPlayer?.id,
+      isCurrentPlayer: currentRevealingPlayerId === currentPlayer?.id,
+      manualRevealMode,
+      alreadyRevealed: revealedCards[playerId]?.includes(cardIndex)
+    });
+    
+    // Handle manual card revelation
+    if (quitPhase === 'revealing' && 
+        currentRevealingPlayerId === playerId && 
+        currentRevealingPlayerId === currentPlayer?.id &&
+        !manualRevealMode) {
+      
+      console.log('Manual reveal triggered for card index:', cardIndex);
+      
+      // Clear the timeout since player is actively revealing
+      if (playerTimeout) {
+        clearTimeout(playerTimeout);
+        setPlayerTimeout(null);
+      }
+      
+      // Only reveal if not already revealed
+      if (!revealedCards[playerId]?.includes(cardIndex)) {
+        // Use the onRevealCard prop to emit the event to server
+        if (onRevealCard) {
+          console.log('[DEBUG] Emitting onRevealCard to server');
+          onRevealCard(playerId, cardIndex);
+          
+          // Check if this is the last card for this player
+          const playerCards = quitData?.all_players?.find(p => p.id === playerId)?.hand || [];
+          const currentRevealedCount = (revealedCards[playerId] || []).length + 1;
+          if (currentRevealedCount >= playerCards.length) {
+            console.log('[DEBUG] Last card revealed for player:', playerId);
+            console.log('[DEBUG] Calculating manual reveal score for player:', playerId, 'Cards:', playerCards);
+            
+            // Add a small delay to ensure all card reveals are processed
+            setTimeout(() => {
+              // Calculate and store the player's score
+              const playerScore = playerCards.reduce((total, card) => {
+                if (card.rank === 'J') return total + 0;
+                if (card.rank === 'K') return total + 13;
+                if (card.rank === 'Q') return total + 12;
+                if (card.rank === 'A') return total + 1;
+                return total + (parseInt(card.rank) || 0);
+              }, 0);
+              
+              console.log('[DEBUG] Manual reveal player score calculated:', playerScore);
+              setPlayerScores(prev => ({ ...prev, [playerId]: playerScore }));
+            }, 500); // 500ms delay to ensure all reveals are processed
+          }
+        } else {
+          console.log('[DEBUG] onRevealCard prop is null!');
+        }
+      } else {
+        console.log('[DEBUG] Card already revealed, skipping');
+      }
+    } else {
+      console.log('[DEBUG] handleRevealCard conditions not met');
+    }
+  };
+
+  const handleAutoReveal = () => {
+    if (quitPhase === 'revealing' && 
+        currentRevealingPlayerId === currentPlayer?.id &&
+        !manualRevealMode) {
+      
+      console.log('Auto-reveal button clicked');
+      
+      // Clear the timeout
+      if (playerTimeout) {
+        clearTimeout(playerTimeout);
+        setPlayerTimeout(null);
+      }
+      
+      // Enable auto-reveal mode
+      setManualRevealMode(true);
+    }
   };
 
   const getPlayerPositions = () => {
@@ -187,14 +460,15 @@ const GameScreen = ({
   const positions = getPlayerPositions();
 
   // Debug logging
-  console.log("GameScreen render:", {
-    players: players.length,
+  console.log('[DEBUG] GameScreen render:', {
     currentPlayer: currentPlayer?.name,
-    turnPlayer: turnPlayer?.name,
     isMyTurn: isMyTurn,
     myHand: myHand.length,
-    positions: positions,
-    quitPhase: quitPhase,
+    players: players.length,
+    quitData: quitData ? 'present' : 'null',
+    quitPhase,
+    currentRevealingPlayerId,
+    revealComplete
   });
 
   const handlePickFromCenterPile = () => {
@@ -212,6 +486,7 @@ const GameScreen = ({
 
   // Render quit phase content
   const renderQuitContent = () => {
+    console.log('[DEBUG] renderQuitContent called with quitPhase:', quitPhase, 'quitData:', quitData ? 'present' : 'null');
     if (!quitData) return null;
 
     switch (quitPhase) {
@@ -240,6 +515,96 @@ const GameScreen = ({
           </motion.div>
         );
 
+      case 'quit-reveal':
+        return (
+          <motion.div
+            className="absolute inset-0 flex flex-col items-center justify-center z-20"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5 }}
+          >
+            <div className="text-center mb-8">
+              <div className="text-2xl md:text-3xl font-bold text-white mb-2">
+                {quitData.quitPlayer.name} IQUIT at {quitData.quitPlayer.hand?.reduce((total, card) => {
+                  const faceVal = {
+                    'A': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+                    '10': 10, 'J': 0, 'Q': 20, 'K': 20
+                  };
+                  return total + faceVal[card.rank];
+                }, 0) || 0}
+              </div>
+              <div className="text-lg text-white/60">
+                Revealing {quitData.quitPlayer.name}'s cards...
+              </div>
+            </div>
+
+            {/* Quit player's cards being auto-revealed */}
+            <div className="text-center">
+              <div className="text-lg text-white/80 mb-4">
+                {quitData.quitPlayer.name}'s cards
+              </div>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {(quitData.all_players.find(p => p.id === quitData.quitPlayer.id)?.hand || []).map((card, index) => (
+                  <motion.div
+                    key={index}
+                    className={`w-12 h-18 md:w-16 md:h-24 rounded-lg shadow-lg flex flex-col items-center justify-center transition-all ${
+                      revealedCards[quitData.quitPlayer.id]?.includes(index)
+                        ? 'bg-white'
+                        : 'bg-blue-800 border-2 border-blue-600'
+                    }`}
+                    initial={{ scale: 0, rotateY: 180 }}
+                    animate={{ 
+                      scale: 1, 
+                      rotateY: revealedCards[quitData.quitPlayer.id]?.includes(index) ? 0 : 180 
+                    }}
+                    transition={{ delay: index * 0.1 }}
+                  >
+                    {revealedCards[quitData.quitPlayer.id]?.includes(index) ? (
+                      <>
+                        <div className={`text-sm md:text-lg font-bold font-numbers ${
+                          card.suit === 'hearts' || card.suit === 'diamonds' ? 'text-red-600' : 'text-black'
+                        }`}>
+                          {card.rank}
+                        </div>
+                        <div className={`text-lg md:text-xl ${
+                          card.suit === 'hearts' || card.suit === 'diamonds' ? 'text-red-600' : 'text-black'
+                        }`}>
+                          {getSuitSymbol(card.suit)}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-white text-lg md:text-2xl">🂠</div>
+                    )}
+                  </motion.div>
+                ))}
+              </div>
+              
+              {/* Show quit player's total score when all cards are revealed */}
+              {revealedCards[quitData.quitPlayer.id]?.length === (quitData.all_players.find(p => p.id === quitData.quitPlayer.id)?.hand || []).length && (
+                <motion.div
+                  className="mt-4 p-4 bg-red-900/20 border border-red-500/30 rounded-lg"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.5 }}
+                >
+                  <div className="text-lg text-white font-semibold">
+                    {quitData.quitPlayer.name}'s total hand value: 
+                    <span className="text-red-400 font-bold ml-2">
+                      {quitData.quitPlayer.hand?.reduce((total, card) => {
+                        const faceVal = {
+                          'A': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+                          '10': 10, 'J': 0, 'Q': 20, 'K': 20
+                        };
+                        return total + faceVal[card.rank];
+                      }, 0) || 0}
+                    </span>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          </motion.div>
+        );
+
       case 'revealing':
         return (
           <motion.div
@@ -250,36 +615,77 @@ const GameScreen = ({
           >
             <div className="text-center mb-8">
               <div className="text-2xl md:text-3xl font-bold text-white mb-2">
-                {quitData.quitPlayer.name} IQUIT at {quitData.quitPlayer.hand?.length || 0}
+                {quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.name} is revealing cards...
               </div>
-              <div className="text-lg text-white/60">
-                {currentRevealingPlayer?.name} is revealing cards...
-              </div>
+              
+              {/* Manual revelation controls for current player */}
+              {isCurrentPlayerTurn && !manualRevealMode && (
+                <div className="mt-4 space-y-3">
+                  <div className="text-sm text-white/80">
+                    Click on your cards to reveal them one by one
+                  </div>
+                  
+                  {/* Timeout display */}
+                  <div className="flex items-center justify-center space-x-2">
+                    <div className="text-lg font-bold text-neon-blue font-numbers">
+                      {timeoutSeconds}
+                    </div>
+                    <div className="text-sm text-white/60">
+                      seconds remaining
+                    </div>
+                  </div>
+                  
+                  {/* Auto-reveal button */}
+                  <motion.button
+                    onClick={handleAutoReveal}
+                    className="px-4 py-2 bg-neon-blue text-white rounded-lg font-bold hover:bg-blue-500 transition-colors text-sm"
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    Auto-Reveal All Cards
+                  </motion.button>
+                </div>
+              )}
+              
+              {/* Auto-reveal mode indicator */}
+              {manualRevealMode && (
+                <div className="mt-4 text-sm text-white/60">
+                  Auto-revealing cards...
+                </div>
+              )}
             </div>
 
             {/* Current revealing player's cards */}
-            {currentRevealingPlayer && (
+            {currentRevealingPlayerId && (
               <div className="text-center">
                 <div className="text-lg text-white/80 mb-4">
-                  {currentRevealingPlayer.name}'s cards
+                  {quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.name}'s cards
                 </div>
                 <div className="flex flex-wrap gap-2 justify-center">
-                  {(sortedCards[currentRevealingPlayer.id] || []).map((card, index) => (
+                  {(quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || []).map((card, index) => (
                     <motion.div
                       key={index}
-                      className={`w-12 h-18 md:w-16 md:h-24 rounded-lg shadow-lg flex flex-col items-center justify-center ${
-                        revealedCards[currentRevealingPlayer.id]?.includes(index)
+                      className={`w-12 h-18 md:w-16 md:h-24 rounded-lg shadow-lg flex flex-col items-center justify-center cursor-pointer transition-all ${
+                        revealedCards[currentRevealingPlayerId]?.includes(index)
                           ? 'bg-white'
+                          : isCurrentPlayerTurn && !manualRevealMode
+                          ? 'bg-blue-800 border-2 border-blue-400 hover:border-blue-300 hover:bg-blue-700'
                           : 'bg-blue-800 border-2 border-blue-600'
                       }`}
                       initial={{ scale: 0, rotateY: 180 }}
                       animate={{ 
                         scale: 1, 
-                        rotateY: revealedCards[currentRevealingPlayer.id]?.includes(index) ? 0 : 180 
+                        rotateY: revealedCards[currentRevealingPlayerId]?.includes(index) ? 0 : 180 
                       }}
                       transition={{ delay: index * 0.1 }}
+                      onClick={() => handleRevealCard(currentRevealingPlayerId, index)}
+                      style={{
+                        cursor: isCurrentPlayerTurn && !manualRevealMode && !revealedCards[currentRevealingPlayerId]?.includes(index) 
+                          ? 'pointer' 
+                          : 'default'
+                      }}
                     >
-                      {revealedCards[currentRevealingPlayer.id]?.includes(index) ? (
+                      {revealedCards[currentRevealingPlayerId]?.includes(index) ? (
                         <>
                           <div className={`text-sm md:text-lg font-bold font-numbers ${
                             card.suit === 'hearts' || card.suit === 'diamonds' ? 'text-red-600' : 'text-black'
@@ -298,6 +704,23 @@ const GameScreen = ({
                     </motion.div>
                   ))}
                 </div>
+                
+                {/* Show current player's total score when all cards are revealed */}
+                {revealedCards[currentRevealingPlayerId]?.length === (quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || []).length && (
+                  <motion.div
+                    className="mt-4 p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.5 }}
+                  >
+                    <div className="text-lg text-white font-semibold">
+                      {quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.name}'s total hand value: 
+                      <span className="text-blue-400 font-bold ml-2">
+                        {playerScores[currentRevealingPlayerId] || 0}
+                      </span>
+                    </div>
+                  </motion.div>
+                )}
               </div>
             )}
           </motion.div>
@@ -311,59 +734,120 @@ const GameScreen = ({
             animate={{ opacity: 1 }}
             transition={{ duration: 0.5 }}
           >
-            <div className="text-center mb-8">
-              <div className="text-3xl md:text-4xl font-bold text-white mb-4">
-                Round Complete!
+            <div className="text-center">
+              <div className="text-2xl md:text-3xl font-bold text-white mb-6">
+                Round Summary
               </div>
-              <div className="text-lg text-white/60 mb-6">
-                Final scores have been calculated
-              </div>
-            </div>
-
-            {/* Final scores */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
-              {players.map((player) => (
-                <motion.div
-                  key={player.id}
-                  className="bg-black/20 rounded-lg p-4 border border-white/10"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.2 }}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">
-                        {player.name.charAt(0).toUpperCase()}
+              
+              {/* Show score changes based on quit result */}
+              <div className="space-y-4">
+                {(() => {
+                  console.log('[DEBUG] Full quitData in summary:', quitData);
+                  console.log('[DEBUG] quitData.quit_result:', quitData?.quit_result);
+                  console.log('[DEBUG] quitData.quitResult:', quitData?.quitResult);
+                  
+                  // Try both possible property names
+                  const quitResult = quitData?.quit_result || quitData?.quitResult;
+                  const isSuccessfulQuit = quitResult?.success;
+                  console.log('[DEBUG] Summary calculation:', {
+                    quitResult,
+                    isSuccessfulQuit,
+                    quitPlayer: quitData?.quitPlayer?.name,
+                    allPlayers: quitData?.all_players?.map(p => ({ name: p.name, id: p.id }))
+                  });
+                  
+                  const scoreChanges = [];
+                  
+                  // Let me also check the message to see what type of quit it was
+                  const quitMessage = quitResult?.message || '';
+                  console.log('[DEBUG] Quit message:', quitMessage);
+                  
+                  // Check if it's a successful quit by looking at the message
+                  const isSuccessfulByMessage = quitMessage.includes('had the lowest value');
+                  console.log('[DEBUG] Is successful by message:', isSuccessfulByMessage);
+                  
+                  // Use the success field directly since we know it's working
+                  const isSuccessful = quitResult?.success === true;
+                  console.log('[DEBUG] Is successful by success field:', isSuccessful);
+                  
+                  if (isSuccessful) {
+                    // Successful quit: all non-quitters get their hand values as score
+                    quitData.all_players.forEach(player => {
+                      if (player.id !== quitData.quitPlayer.id) {
+                        // Use same card value calculation as server
+                        const faceVal = {
+                          'A': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+                          '10': 10, 'J': 0, 'Q': 20, 'K': 20
+                        };
+                        const handValue = player.hand.reduce((sum, card) => sum + faceVal[card.rank], 0);
+                        console.log('[DEBUG] Adding score for successful quit:', player.name, handValue);
+                        scoreChanges.push({ playerId: player.id, playerName: player.name, scoreChange: handValue });
+                      }
+                    });
+                    
+                    // Also show the quit player's hand value (but not as a score change)
+                    const quitPlayerHandValue = quitData.quitPlayer.hand.reduce((sum, card) => {
+                      const faceVal = {
+                        'A': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
+                        '10': 10, 'J': 0, 'Q': 20, 'K': 20
+                      };
+                      return sum + faceVal[card.rank];
+                    }, 0);
+                    console.log('[DEBUG] Quit player hand value:', quitData.quitPlayer.name, quitPlayerHandValue);
+                  } else {
+                    // Failed quit: only quitter gets 25 penalty
+                    console.log('[DEBUG] Adding penalty for failed quit:', quitData.quitPlayer.name, 25);
+                    scoreChanges.push({ 
+                      playerId: quitData.quitPlayer.id, 
+                      playerName: quitData.quitPlayer.name, 
+                      scoreChange: 25 
+                    });
+                  }
+                  
+                  console.log('[DEBUG] Final score changes:', scoreChanges);
+                  
+                  return scoreChanges.map(({ playerId, playerName, scoreChange }) => (
+                    <div key={playerId} className="p-3 bg-gray-800/50 rounded-lg">
+                      <div className="text-lg text-white">
+                        {playerName}: <span className="text-yellow-400 font-bold">+{scoreChange}</span>
                       </div>
-                      <div className="text-white font-semibold">{player.name}</div>
                     </div>
-                    <div className="text-2xl font-bold text-neon-blue font-numbers">
-                      {scores[player.id] || 0}
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
+                  ));
+                })()}
+              </div>
+              
+              {/* Countdown to next round */}
+              <div className="mt-8">
+                <div className="text-lg text-white/80 mb-2">
+                  Starting next round in:
+                </div>
+                <div className="text-4xl font-bold text-neon-blue font-numbers">
+                  {countdown}
+                </div>
+              </div>
             </div>
-
-            {/* Countdown */}
-            <motion.div
-              className="text-center"
-              initial={{ scale: 0.5, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.5 }}
-            >
-              <div className="text-6xl md:text-8xl font-bold text-neon-blue font-numbers mb-4">
-                {countdown}
-              </div>
-              <div className="text-lg text-white/60">
-                Starting next round...
-              </div>
-            </motion.div>
           </motion.div>
         );
 
       default:
-        return null;
+        console.log('[DEBUG] Unknown quitPhase:', quitPhase);
+        return (
+          <motion.div
+            className="absolute inset-0 flex flex-col items-center justify-center z-20"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.5 }}
+          >
+            <div className="text-center">
+              <div className="text-2xl font-bold text-white mb-4">
+                Loading...
+              </div>
+              <div className="text-sm text-white/60">
+                quitPhase: {quitPhase}
+              </div>
+            </div>
+          </motion.div>
+        );
     }
   };
 
@@ -603,13 +1087,13 @@ const GameScreen = ({
                             key={`center-pile-${card.rank}-${card.suit}-${index}-${centerPile.length}`}
                             className={`w-10 h-14 lg:w-16 lg:h-[84px] bg-white font-sans rounded-lg lg:rounded-xl shadow-card flex flex-col items-center justify-center cursor-pointer border-2 ${
                               pickSource === "discard" && pickIndex === index
-                                ? "border-blue-500 shadow-[0_0_15px_rgba(255,255,255,0.8)] animate-glow"
-                                : "border-gray-200"
+                                ? "border-neon-blue shadow-neon-glow"
+                                : "hover:border-neon-blue/50"
                             }`}
                             layout
                             whileHover={{
                               scale: 1.04,
-                              y: -2,
+                              y: -4,
                               rotateY: 5,
                               transition: { duration: 0.2 },
                             }}
@@ -638,19 +1122,19 @@ const GameScreen = ({
                             initial={{
                               scale: 0,
                               rotateY: 180,
-                              y: 50,
+                              y: 100,
                               opacity: 0,
                             }}
                             animate={{
-                              scale: 1,
+                              scale: pickSource === "discard" && pickIndex === index ? 1.1 : 1,
                               rotateY: 0,
-                              y: 0,
+                              y: pickSource === "discard" && pickIndex === index ? -8 : 0,
                               opacity: 1,
                             }}
                             exit={{
                               scale: 0,
                               rotateY: -180,
-                              y: -50,
+                              y: -100,
                               opacity: 0,
                             }}
                             transition={{
@@ -666,12 +1150,7 @@ const GameScreen = ({
                                   ? "text-red-600"
                                   : "text-black"
                               }`}
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              transition={{
-                                delay: 0.6 + index * 0.1,
-                                duration: 0.3,
-                              }}
+                              transition={{ duration: 0.2 }}
                             >
                               {card.rank}
                             </motion.div>
@@ -681,12 +1160,7 @@ const GameScreen = ({
                                   ? "text-red-600"
                                   : "text-black"
                               }`}
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              transition={{
-                                delay: 0.7 + index * 0.1,
-                                duration: 0.3,
-                              }}
+                              transition={{ duration: 0.2 }}
                             >
                               {getSuitSymbol(card.suit)}
                             </motion.div>
