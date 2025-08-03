@@ -33,14 +33,17 @@ function App() {
   const [pickIndex, setPickIndex] = useState(null);
   const [turnsTaken, setTurnsTaken] = useState({});
   const [quitData, setQuitData] = useState(null);
+  const [revealedCards, setRevealedCards] = useState({});
   const [gameOver, setGameOver] = useState(false);
   const [winner, setWinner] = useState(null);
+  const [showScoreboard, setShowScoreboard] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [localStream, setLocalStream] = useState(null);
   const [peerConnections, setPeerConnections] = useState({});
   const [remoteStreams, setRemoteStreams] = useState({});
   const localAudioRef = useRef();
-
+  const [currentRevealingPlayerId, setCurrentRevealingPlayerId] = useState(null);
+  const [revealComplete, setRevealComplete] = useState(false);
 
 
   // Name entry handler
@@ -146,6 +149,7 @@ function App() {
     console.log('socket.id:', socket.id);
     console.log('players:', players);
     console.log('isHost:', isHost);
+    console.log('Emitting start_next_round event');
     socket.emit('start_next_round', { room: room });
   };
 
@@ -159,6 +163,18 @@ function App() {
     setWinner(null);
     setCurrentScreen('lobby');
   };
+
+  // Reset game state when quit data is cleared
+  useEffect(() => {
+    if (!quitData) {
+      console.log('Quit data cleared, resetting game state');
+      setSelectedCards([]);
+      setPickSource(null);
+      setPickIndex(null);
+      setIsFirstTurn(true);
+      setRevealedCards({});
+    }
+  }, [quitData]);
 
   // Socket event handlers
   useEffect(() => {
@@ -191,14 +207,22 @@ function App() {
         if (gameStarted) {
           console.log('Switching to game screen');
           setCurrentScreen('game');
-      setHand(me && me.hand ? me.hand : []);
-      setIsHost(state.players.length && state.players[0].id === socket.id);
-      setTurnIdx(state.turn || 0);
-      setScores(state.scores || {});
-      setCenterPile(state.center_pile || []);
-      setDeckCount(state.deck ? state.deck.length : 0);
-      setIsFirstTurn((state.turn === 0) && (!state.center_pile || state.center_pile.length === 0));
-      setTurnsTaken(state.turns_taken || {});
+          setHand(me && me.hand ? me.hand : []);
+          setIsHost(state.players.length && state.players[0].id === socket.id);
+          setTurnIdx(state.turn || 0);
+          setScores(state.scores || {});
+          setCenterPile(state.center_pile || []);
+          setDeckCount(state.deck ? state.deck.length : 0);
+          setIsFirstTurn((state.turn === 0) && (!state.center_pile || state.center_pile.length === 0));
+          setTurnsTaken(state.turns_taken || {});
+          
+          // Clear quit data if we're getting a new game state
+          if (quitData) {
+            console.log('Clearing quit data due to new room state');
+            setQuitData(null);
+          }
+          
+          console.log('Game state updated successfully');
         } else {
           console.log('Staying in create room screen');
           setCurrentScreen('create-room');
@@ -223,6 +247,12 @@ function App() {
     });
 
     socket.on('quit_reveal', (data) => {
+      console.log('quit_reveal event received:', data);
+      console.log('[DEBUG] Client received quit_reveal data:', {
+        quit_player: data.quit_player,
+        all_players: data.all_players,
+        quit_result: data.quit_result
+      });
       setQuitData({
         quitPlayer: data.quit_player,
         all_players: data.all_players,
@@ -230,8 +260,32 @@ function App() {
       });
     });
 
+    socket.on('card_revealed', (data) => {
+      console.log('Card revealed event received:', data);
+      const { player_id, card_index } = data;
+      setRevealedCards(prev => {
+        const newRevealedCards = { ...prev };
+        if (!newRevealedCards[player_id]) {
+          newRevealedCards[player_id] = [];
+        }
+        if (!newRevealedCards[player_id].includes(card_index)) {
+          newRevealedCards[player_id].push(card_index);
+        }
+        return newRevealedCards;
+      });
+    });
+
     socket.on('next_round_started', () => {
+      console.log('next_round_started event received');
+      console.log('Clearing quit data and resetting game state');
       setQuitData(null);
+      // Reset game state for new round
+      setSelectedCards([]);
+      setPickSource(null);
+      setPickIndex(null);
+      setIsFirstTurn(true);
+      setRevealedCards({});
+      console.log('Game state reset complete - waiting for room_state update');
     });
 
     socket.on('game_over', (data) => {
@@ -257,6 +311,15 @@ function App() {
       setWinner(null);
     });
 
+    socket.on('next_revealing_player', (data) => {
+      setCurrentRevealingPlayerId(data.player_id);
+      setRevealComplete(false);
+    });
+    socket.on('reveal_complete', () => {
+      setRevealComplete(true);
+      setCurrentRevealingPlayerId(null);
+    });
+
     return () => {
       socket.off('connect');
       socket.off('room_state');
@@ -266,6 +329,8 @@ function App() {
       socket.off('next_round_started');
       socket.off('game_over');
       socket.off('kicked');
+      socket.off('next_revealing_player');
+      socket.off('reveal_complete');
     };
   }, [room, players]);
 
@@ -441,6 +506,10 @@ function App() {
             quitData={quitData}
             onRevealCard={handleRevealCard}
             onStartNextRound={handleStartNextRound}
+            revealedCards={revealedCards}
+            currentRevealingPlayerId={currentRevealingPlayerId}
+            revealComplete={revealComplete}
+            onFinishRevealing={() => socket.emit('finished_revealing', { room })}
           />
         )}
 
