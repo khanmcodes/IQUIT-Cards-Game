@@ -4,14 +4,39 @@ import { LuCopy } from "react-icons/lu";
 
 import { FaHouseMedical } from "react-icons/fa6";
 
-const CreateRoom = ({ onBack, onStartGame, roomCode, players = [], isHost, onGenerateRoom, onKickPlayer, currentUserId }) => {
+const CreateRoom = ({ onBack, onStartGame, roomCode, players = [], isHost, onGenerateRoom, onKickPlayer, currentUserId, eliminationScore: roomEliminationScore }) => {
   const [maxPlayers, setMaxPlayers] = useState(4);
+  const [eliminationScore, setEliminationScore] = useState(100);
+  const [customScore, setCustomScore] = useState('');
+  const [useCustomScore, setUseCustomScore] = useState(false);
   
   console.log('CreateRoom props:', { isHost, playersCount: players.length, onKickPlayer: !!onKickPlayer, currentUserId });
 
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomCode);
     // Show toast notification
+  };
+
+  const handleScoreChange = (value) => {
+    if (value === 'custom') {
+      setUseCustomScore(true);
+      setEliminationScore(parseInt(customScore) || 100);
+    } else {
+      setUseCustomScore(false);
+      setEliminationScore(parseInt(value));
+    }
+  };
+
+  const handleCustomScoreChange = (value) => {
+    setCustomScore(value);
+    if (useCustomScore) {
+      setEliminationScore(parseInt(value) || 100);
+    }
+  };
+
+  const handleGenerateRoom = () => {
+    const finalScore = useCustomScore ? (parseInt(customScore) || 100) : eliminationScore;
+    onGenerateRoom(finalScore);
   };
 
   return (
@@ -69,8 +94,33 @@ const CreateRoom = ({ onBack, onStartGame, roomCode, players = [], isHost, onGen
                   </select>
                 </div>
 
+                <div>
+                  <label className="block text-white/80 mb-2 font-medium">Elimination Score</label>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <select
+                      value={eliminationScore}
+                      onChange={(e) => handleScoreChange(e.target.value)}
+                      className="w-full sm:w-1/2 px-4 py-3 bg-dark-800 border border-white/20 rounded-xl text-white focus:outline-none focus:border-neon-blue focus:ring-2 focus:ring-neon-blue/20 transition-all"
+                    >
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                      <option value="200">200</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                    {useCustomScore && (
+                      <input
+                        type="number"
+                        value={customScore}
+                        onChange={(e) => handleCustomScoreChange(e.target.value)}
+                        className="w-full sm:w-1/2 px-4 py-3 bg-dark-800 border border-white/20 rounded-xl text-white focus:outline-none focus:border-neon-blue focus:ring-2 focus:ring-neon-blue/20 transition-all"
+                        placeholder="Enter custom score"
+                      />
+                    )}
+                  </div>
+                </div>
+
                 <button
-                  onClick={onGenerateRoom}
+                  onClick={handleGenerateRoom}
                   disabled={roomCode}
                   className="w-full py-4 px-8 bg-green-600 text-white font-semibold rounded-xl hover:bg-green-600/80 transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed text-lg"
                 >
@@ -108,12 +158,26 @@ const CreateRoom = ({ onBack, onStartGame, roomCode, players = [], isHost, onGen
                   </button>
                 </div>
                 <p className="text-white/60 text-sm mt-2">Share this code with friends to join</p>
+                
+                {/* Room Settings Display */}
+                <div className="mt-4 pt-4 border-t border-white/20">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-white/60">Max Players:</span>
+                      <span className="text-white ml-2">{maxPlayers}</span>
+                    </div>
+                    <div>
+                      <span className="text-white/60">Elimination Score:</span>
+                      <span className="text-white ml-2">{roomEliminationScore}</span>
+                    </div>
+                  </div>
+                </div>
               </motion.div>
             )}
 
             {/* Players List */}
-            <div className="bg-[#191919] border border-white/20 rounded-xl p-6">
-              <div className="flex justify-between items-center mb-4">
+            <div className="bg-[#191919] border border-white/20 rounded-xl p-6 flex flex-col h-full">
+              <div className="flex justify-between items-center mb-4 flex-shrink-0">
                 <h3 className="text-lg font-bold text-white">Players ({players.length}/{maxPlayers})</h3>
                 {isHost && players.length >= 2 && (
                   <button
@@ -124,8 +188,16 @@ const CreateRoom = ({ onBack, onStartGame, roomCode, players = [], isHost, onGen
                   </button>
                 )}
               </div>
+              
+              {/* Game Settings Display */}
+              <div className="mb-4 p-3 bg-dark-800/50 rounded-lg flex-shrink-0">
+                <div className="text-sm text-white/80">
+                  <span className="font-medium">Elimination Score:</span>
+                  <span className="text-white ml-2">{roomEliminationScore}</span>
+                </div>
+              </div>
 
-              <div className="space-y-3">
+              <div className="space-y-3 flex-1 scrollable-container max-h-96">
                 {console.log('Rendering players:', players.map(p => ({ name: p.name, isHost: p.isHost, id: p.id })))}
                 {players.map((player, index) => (
                   <motion.div

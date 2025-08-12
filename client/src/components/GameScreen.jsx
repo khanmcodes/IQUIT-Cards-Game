@@ -235,6 +235,9 @@ const GameScreen = ({
           
           console.log('[DEBUG] Auto-reveal player score calculated:', playerScore);
           setPlayerScores(prev => ({ ...prev, [currentRevealingPlayerId]: playerScore }));
+          
+          // NOTE: onFinishRevealing is handled by useEffect, not here
+          console.log('[DEBUG] Auto-reveal complete for player:', currentRevealingPlayerId, 'useEffect will handle onFinishRevealing');
         }
       }
     }
@@ -270,15 +273,20 @@ const GameScreen = ({
 
   // Timeout countdown for manual revelation
   useEffect(() => {
-    if (quitPhase === 'revealing' && 
-        isCurrentPlayerTurn && 
-        !manualRevealMode && 
-        timeoutSeconds > 0) {
-      
+    if (
+      quitPhase === 'revealing' &&
+      isCurrentPlayerTurn &&
+      !manualRevealMode &&
+      timeoutSeconds > 0
+    ) {
       const timer = setTimeout(() => {
-        setTimeoutSeconds(timeoutSeconds - 1);
+        if (timeoutSeconds === 1) {
+          setTimeoutSeconds(0);
+          setManualRevealMode(true);
+        } else {
+          setTimeoutSeconds(timeoutSeconds - 1);
+        }
       }, 1000);
-      
       return () => clearTimeout(timer);
     }
   }, [quitPhase, isCurrentPlayerTurn, manualRevealMode, timeoutSeconds]);
@@ -303,9 +311,10 @@ const GameScreen = ({
       revealedCards[currentRevealingPlayerId]?.length === playerCards.length &&
       onFinishRevealing
     ) {
-      console.log('[DEBUG] Calling onFinishRevealing for player:', currentRevealingPlayerId);
+      console.log('[DEBUG] useEffect calling onFinishRevealing for player:', currentRevealingPlayerId, 'after 1.5 second delay');
       // Add a longer delay so players can see the last card before moving to next player
       setTimeout(() => {
+        console.log('[DEBUG] useEffect executing onFinishRevealing for player:', currentRevealingPlayerId);
         onFinishRevealing();
       }, 1500); // 1.5 seconds delay
     }
@@ -390,6 +399,9 @@ const GameScreen = ({
               
               console.log('[DEBUG] Manual reveal player score calculated:', playerScore);
               setPlayerScores(prev => ({ ...prev, [playerId]: playerScore }));
+              
+                        // NOTE: onFinishRevealing is handled by useEffect, not here
+              console.log('[DEBUG] Manual reveal complete for player:', playerId, 'useEffect will handle onFinishRevealing');
             }, 500); // 500ms delay to ensure all reveals are processed
           }
         } else {
@@ -617,14 +629,12 @@ const GameScreen = ({
               <div className="text-2xl md:text-3xl font-bold text-white mb-2">
                 {quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.name} is revealing cards...
               </div>
-              
               {/* Manual revelation controls for current player */}
               {isCurrentPlayerTurn && !manualRevealMode && (
                 <div className="mt-4 space-y-3">
                   <div className="text-sm text-white/80">
                     Click on your cards to reveal them one by one
                   </div>
-                  
                   {/* Timeout display */}
                   <div className="flex items-center justify-center space-x-2">
                     <div className="text-lg font-bold text-neon-blue font-numbers">
@@ -634,7 +644,6 @@ const GameScreen = ({
                       seconds remaining
                     </div>
                   </div>
-                  
                   {/* Auto-reveal button */}
                   <motion.button
                     onClick={handleAutoReveal}
@@ -646,15 +655,13 @@ const GameScreen = ({
                   </motion.button>
                 </div>
               )}
-              
               {/* Auto-reveal mode indicator */}
-              {manualRevealMode && (
+              {isCurrentPlayerTurn && manualRevealMode && (
                 <div className="mt-4 text-sm text-white/60">
                   Auto-revealing cards...
                 </div>
               )}
             </div>
-
             {/* Current revealing player's cards */}
             {currentRevealingPlayerId && (
               <div className="text-center">
@@ -662,31 +669,30 @@ const GameScreen = ({
                   {quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.name}'s cards
                 </div>
                 <div className="flex flex-wrap gap-2 justify-center">
-                  {(quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || []).map((card, index) => (
-                    <motion.div
-                      key={index}
-                      className={`w-12 h-18 md:w-16 md:h-24 rounded-lg shadow-lg flex flex-col items-center justify-center cursor-pointer transition-all ${
-                        revealedCards[currentRevealingPlayerId]?.includes(index)
-                          ? 'bg-white'
-                          : isCurrentPlayerTurn && !manualRevealMode
-                          ? 'bg-blue-800 border-2 border-blue-400 hover:border-blue-300 hover:bg-blue-700'
-                          : 'bg-blue-800 border-2 border-blue-600'
-                      }`}
-                      initial={{ scale: 0, rotateY: 180 }}
-                      animate={{ 
-                        scale: 1, 
-                        rotateY: revealedCards[currentRevealingPlayerId]?.includes(index) ? 0 : 180 
-                      }}
-                      transition={{ delay: index * 0.1 }}
-                      onClick={() => handleRevealCard(currentRevealingPlayerId, index)}
-                      style={{
-                        cursor: isCurrentPlayerTurn && !manualRevealMode && !revealedCards[currentRevealingPlayerId]?.includes(index) 
-                          ? 'pointer' 
-                          : 'default'
-                      }}
-                    >
-                      {revealedCards[currentRevealingPlayerId]?.includes(index) ? (
-                        <>
+                  {(quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || []).map((card, index) => {
+                    const isRevealed = revealedCards[currentRevealingPlayerId]?.includes(index);
+                    const isMyCard = isCurrentPlayerTurn && currentRevealingPlayerId === currentPlayer?.id;
+                    // Show all cards face-up to the revealing player, but only revealed cards to others
+                    if (isMyCard) {
+                      return (
+                        <motion.div
+                          key={index}
+                          className={`w-12 h-18 md:w-16 md:h-24 rounded-lg shadow-lg flex flex-col items-center justify-center cursor-pointer transition-all border-2 ${
+                            isRevealed
+                              ? 'bg-white border-blue-400'
+                              : 'bg-white border-yellow-400 opacity-60 relative'
+                          }`}
+                          initial={{ scale: 0, rotateY: 180 }}
+                          animate={{
+                            scale: 1,
+                            rotateY: 0
+                          }}
+                          transition={{ delay: index * 0.1 }}
+                          onClick={() => handleRevealCard(currentRevealingPlayerId, index)}
+                          style={{
+                            cursor: !manualRevealMode && !isRevealed ? 'pointer' : 'default'
+                          }}
+                        >
                           <div className={`text-sm md:text-lg font-bold font-numbers ${
                             card.suit === 'hearts' || card.suit === 'diamonds' ? 'text-red-600' : 'text-black'
                           }`}>
@@ -697,14 +703,49 @@ const GameScreen = ({
                           }`}>
                             {getSuitSymbol(card.suit)}
                           </div>
-                        </>
-                      ) : (
-                        <div className="text-white text-lg md:text-2xl">🂠</div>
-                      )}
-                    </motion.div>
-                  ))}
+                          {!isRevealed && (
+                            <span className="absolute bottom-1 left-1 right-1 text-xs text-yellow-700 bg-yellow-200 rounded px-1 py-0.5 opacity-90 pointer-events-none select-none" style={{fontWeight:'bold'}}>Preview</span>
+                          )}
+                        </motion.div>
+                      );
+                    } else {
+                      // For other players, only show revealed cards face-up
+                      return (
+                        <motion.div
+                          key={index}
+                          className={`w-12 h-18 md:w-16 md:h-24 rounded-lg shadow-lg flex flex-col items-center justify-center transition-all ${
+                            isRevealed
+                              ? 'bg-white'
+                              : 'bg-blue-800 border-2 border-blue-600'
+                          }`}
+                          initial={{ scale: 0, rotateY: 180 }}
+                          animate={{
+                            scale: 1,
+                            rotateY: isRevealed ? 0 : 180
+                          }}
+                          transition={{ delay: index * 0.1 }}
+                        >
+                          {isRevealed ? (
+                            <>
+                              <div className={`text-sm md:text-lg font-bold font-numbers ${
+                                card.suit === 'hearts' || card.suit === 'diamonds' ? 'text-red-600' : 'text-black'
+                              }`}>
+                                {card.rank}
+                              </div>
+                              <div className={`text-lg md:text-xl ${
+                                card.suit === 'hearts' || card.suit === 'diamonds' ? 'text-red-600' : 'text-black'
+                              }`}>
+                                {getSuitSymbol(card.suit)}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-white text-lg md:text-2xl">🂠</div>
+                          )}
+                        </motion.div>
+                      );
+                    }
+                  })}
                 </div>
-                
                 {/* Show current player's total score when all cards are revealed */}
                 {revealedCards[currentRevealingPlayerId]?.length === (quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || []).length && (
                   <motion.div
@@ -894,7 +935,7 @@ const GameScreen = ({
                     {players.slice(0, 4).map((player, index) => (
                       <motion.div
                         key={player.id}
-                        className="flex items-center space-x-2 bg-black/20 rounded-lg px-3 py-1.5 border border-white/10"
+                        className={`flex items-center space-x-2 bg-black/20 rounded-lg px-3 py-1.5 border border-white/10 ${player.eliminated ? 'opacity-40 grayscale' : ''}`}
                         initial={{ opacity: 0, scale: 0.8 }}
                         animate={{ opacity: 1, scale: 1 }}
                         transition={{ delay: 0.3 + index * 0.1 }}
@@ -902,9 +943,7 @@ const GameScreen = ({
                         <div className="w-6 h-6 bg-blue-600 rounded-full flex items-center justify-center text-white text-xs font-bold">
                           {player.name.charAt(0).toUpperCase()}
                         </div>
-                        <div className="text-white font-bold text-sm font-numbers">
-                          {scores[player.id] || 0}
-                        </div>
+                        <div className={`text-white font-bold text-sm font-numbers ${player.eliminated ? 'line-through' : ''}`}>{scores[player.id] || 0}</div>
                       </motion.div>
                     ))}
                   </div>
@@ -1436,9 +1475,7 @@ const PlayerCard = ({ player, isCurrentTurn, vertical = false }) => {
               />
             </motion.div>
           )}
-          <div className="text-white/60 font-sans font-bold text-xs md:text-sm truncate">
-            {player.name}
-          </div>
+          <div className={`text-white/60 font-sans font-bold text-xs md:text-sm truncate ${player.eliminated ? 'line-through opacity-50' : ''}`}>{player.name}</div>
         </div>
         <div className="flex items-center justify-center">
           <div className="relative">
