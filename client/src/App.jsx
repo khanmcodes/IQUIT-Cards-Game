@@ -44,6 +44,7 @@ function App() {
   const localAudioRef = useRef();
   const [currentRevealingPlayerId, setCurrentRevealingPlayerId] = useState(null);
   const [revealComplete, setRevealComplete] = useState(false);
+  const [roomData, setRoomData] = useState(null);
 
 
   // Name entry handler
@@ -79,11 +80,11 @@ function App() {
   };
 
   // Room management
-  const handleGenerateRoom = () => {
+  const handleGenerateRoom = (eliminationScore = 100) => {
     const code = Math.floor(100 + Math.random() * 900).toString();
     setRoomCode(code);
     setRoom(code);
-    socket.emit('create_room', { room: code, name: user.username });
+    socket.emit('create_room', { room: code, name: user.username, eliminationScore });
   };
 
   const handleJoinRoomSubmit = (code) => {
@@ -185,6 +186,9 @@ function App() {
     socket.on('room_state', (state) => {
       console.log('Room state received:', state);
       console.log('Players:', state.players?.length, state.players?.map(p => ({ name: p.name, id: p.id, hand: p.hand?.length })));
+      
+      // Store room data
+      setRoomData(state);
       
       // Add isHost property to each player
       const playersWithHost = state.players?.map((player, index) => ({
@@ -437,7 +441,7 @@ function App() {
     return () => socket.off('voice-signal', handleSignal);
   }, [voiceEnabled, peerConnections, localStream, room]);
 
-  const isMyTurn = players[turnIdx] && players[turnIdx].id === socket.id;
+  const isMyTurn = players[turnIdx] && players[turnIdx].id === socket.id && !players[turnIdx].eliminated;
   const canQuit = isMyTurn && (turnsTaken[socket.id] || 0) >= 3;
 
   return (
@@ -468,6 +472,7 @@ function App() {
             players={players}
             isHost={isHost}
             currentUserId={socket.id}
+            eliminationScore={roomData?.eliminationScore || 100}
           />
         )}
 

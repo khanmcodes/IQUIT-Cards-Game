@@ -20,13 +20,18 @@ const rooms = {};
 
 // Helper function to add isHost property to players
 function addHostProperty(room) {
-  return {
+  const result = {
     ...room,
     players: room.players.map((player, index) => ({
       ...player,
       isHost: index === 0 // First player is always the host
     }))
   };
+  
+  // Add debugging info
+  console.log('[DEBUG] addHostProperty - Turn:', room.turn, 'Player:', room.players[room.turn]?.name, 'Eliminated:', room.players[room.turn]?.eliminated);
+  
+  return result;
 }
 
 // Helper: build and shuffle a 52-card deck
@@ -98,13 +103,55 @@ function isValidPlay(cards) {
   return { valid: false, message: 'Invalid play.' };
 }
 
+// Helper to check and update eliminated status
+function updateEliminations(room) {
+  const eliminationScore = room.eliminationScore || 100;
+  console.log('[DEBUG] updateEliminations called with elimination score:', eliminationScore);
+  
+  room.players.forEach(player => {
+    const currentScore = room.scores[player.id] || 0;
+    const wasEliminated = player.eliminated;
+    
+    if (currentScore > eliminationScore) {
+      player.eliminated = true;
+      if (!wasEliminated) {
+        console.log(`[DEBUG] Player ${player.name} eliminated: score ${currentScore} > ${eliminationScore}`);
+      }
+    }
+  });
+}
+
+// Helper to get next non-eliminated player's index
+function getNextActivePlayerIdx(room, startIdx) {
+  const n = room.players.length;
+  let idx = (startIdx + 1) % n;
+  let count = 0;
+  
+  // Find next non-eliminated player
+  while (count < n) {
+    if (!room.players[idx].eliminated) {
+      return idx;
+    }
+    idx = (idx + 1) % n;
+    count++;
+  }
+  
+  // If all players are eliminated, return -1 (should trigger game over)
+  return -1;
+}
+
+// Helper to count active players
+function countActivePlayers(room) {
+  return room.players.filter(p => !p.eliminated).length;
+}
+
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
   // Create a new room
   socket.on('create_room', (data) => {
-    const { room, name } = data;
+    const { room, name, eliminationScore = 100 } = data;
     
     // Check if room already exists
     if (rooms[room]) {
@@ -114,12 +161,13 @@ io.on('connection', (socket) => {
     
     // Initialize room state
     rooms[room] = {
-      players: [{ id: socket.id, name, hand: [] }],
+      players: [{ id: socket.id, name, hand: [], eliminated: false }],
       deck: shuffledDeck(),
       center_pile: [],
       turn: 0,
       scores: {},
-      turn_start_time: Date.now()
+      turn_start_time: Date.now(),
+      eliminationScore: parseInt(eliminationScore) || 100
     };
     
     if (!rooms[room].turns_taken) {
@@ -162,7 +210,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    rooms[room].players.push({ id: socket.id, name, hand: [] });
+    rooms[room].players.push({ id: socket.id, name, hand: [], eliminated: false });
     
     if (!rooms[room].turns_taken) {
       rooms[room].turns_taken = {};
@@ -201,6 +249,7 @@ io.on('connection', (socket) => {
     // Deal cards
     r.players.forEach(player => {
       player.hand = [];
+      player.eliminated = false;
       for (let i = 0; i < 5; i++) {
         player.hand.push(r.deck.pop());
       }
@@ -242,6 +291,13 @@ io.on('connection', (socket) => {
     if (player.id !== socket.id) {
       console.log('Not your turn:', socket.id);
       socket.emit('error', { msg: 'Not your turn!' });
+      return;
+    }
+    
+    // Check if player is eliminated
+    if (player.eliminated) {
+      console.log('Player is eliminated, cannot take turn:', player.name);
+      socket.emit('error', { msg: 'You are eliminated and cannot take turns!' });
       return;
     }
     
@@ -322,11 +378,28 @@ io.on('connection', (socket) => {
     }
     r.turns_taken[player.id]++;
     
-    // Advance turn
-    r.turn = (r.turn + 1) % r.players.length;
+    // Advance turn to next non-eliminated player
+    let nextIdx = getNextActivePlayerIdx(r, r.turn);
+    
+    if (nextIdx === -1) {
+      // No active players found - check if this should trigger game over
+      const activePlayers = r.players.filter(p => !p.eliminated);
+      if (activePlayers.length === 1) {
+        console.log('[DEBUG] Only one active player remaining, ending game');
+        io.to(room).emit('game_over', { winner: activePlayers[0] });
+        return;
+      } else if (activePlayers.length === 0) {
+        console.log('[DEBUG] No active players, ending game');
+        io.to(room).emit('game_over', { winner: null });
+        return;
+      }
+    }
+    
+    r.turn = nextIdx;
     r.turn_start_time = Date.now();
     
     console.log('Turn processed, new center_pile:', r.center_pile);
+    console.log('[DEBUG] Turn advanced to player:', r.players[r.turn]?.name, 'eliminated:', r.players[r.turn]?.eliminated);
     io.to(room).emit('room_state', addHostProperty(r));
   });
 
@@ -348,6 +421,13 @@ io.on('connection', (socket) => {
       return;
     }
     
+    // Check if player is eliminated
+    if (player.eliminated) {
+      console.log('Player is eliminated, cannot quit:', player.name);
+      socket.emit('error', { msg: 'You are eliminated and cannot quit!' });
+      return;
+    }
+    
     // Calculate hand values
     function handValue(hand) {
       const faceVal = {
@@ -358,7 +438,7 @@ io.on('connection', (socket) => {
     }
     
     const my_val = handValue(player.hand);
-    const others = r.players.filter(p => p.id !== player.id);
+    const others = r.players.filter(p => p.id !== player.id && !p.eliminated); // Only include non-eliminated players
     const others_vals = others.map(p => handValue(p.hand));
     
     // Must have at least 3 turns per player before quitting
@@ -375,16 +455,23 @@ io.on('connection', (socket) => {
     }
     
     // Scoring
+    console.log('[DEBUG] Scoring calculation:');
+    console.log(`  - Quitter (${player.name}) hand value: ${my_val}`);
+    console.log(`  - Others (non-eliminated): ${others.map(p => p.name).join(', ')}`);
+    console.log(`  - Others hand values: ${others_vals.join(', ')}`);
+    
     let msg;
     if (others_vals.every(v => my_val < v)) {
       // Quitter has lowest value, add others' values to their scores
       others.forEach((p, i) => {
         r.scores[p.id] += others_vals[i];
+        console.log(`  - ${p.name} gets +${others_vals[i]} points`);
       });
       msg = `${player.name} quit and had the lowest value! Others get their hand values as score.`;
     } else {
       // Penalty to quitter
       r.scores[player.id] += 25;
+      console.log(`  - ${player.name} gets +25 penalty points`);
       msg = `${player.name} quit but did not have the lowest value. 25 penalty!`;
     }
     
@@ -402,14 +489,27 @@ io.on('connection', (socket) => {
     };
     
     console.log('[DEBUG] Server sending quit_reveal data:', quit_reveal_data);
+    console.log('[DEBUG] Current player status before revelation:');
+    r.players.forEach(p => {
+      console.log(`  - ${p.name}: eliminated=${p.eliminated}, score=${r.scores[p.id] || 0}`);
+    });
+    
+    console.log('[DEBUG] Final scores after quit:');
+    r.players.forEach(p => {
+      console.log(`  - ${p.name}: ${r.scores[p.id] || 0}`);
+    });
+    
     io.to(room).emit('quit_reveal', quit_reveal_data);
 
     // --- NEW: Setup reveal order for manual reveal phase ---
     r.reveal_phase = {
-      non_quitters: r.players.filter(p => p.id !== player.id).map(p => p.id),
+      non_quitters: r.players.filter(p => p.id !== player.id && !p.eliminated).map(p => p.id), // Only include non-quitters who are NOT eliminated
       current_index: 0,
       in_progress: true
     };
+    
+    console.log('[DEBUG] Setting up revelation phase. Non-quitters (not eliminated):', r.reveal_phase.non_quitters.map(id => r.players.find(p => p.id === id)?.name));
+    
     if (r.reveal_phase.non_quitters.length > 0) {
       io.to(room).emit('next_revealing_player', {
         player_id: r.reveal_phase.non_quitters[0]
@@ -418,34 +518,56 @@ io.on('connection', (socket) => {
       io.to(room).emit('reveal_complete');
       r.reveal_phase.in_progress = false;
     }
+
+    // DON'T check eliminations here - wait until after revelations are complete
   });
 
-  // --- NEW: Handle finished_revealing event ---
-  socket.on('finished_revealing', (data) => {
-    console.log('[DEBUG] finished_revealing event received:', data);
-    const { room } = data;
-    const r = rooms[room];
-    if (!r || !r.reveal_phase || !r.reveal_phase.in_progress) {
-      console.log('[DEBUG] Invalid reveal phase state:', { 
-        room: !!r, 
-        reveal_phase: !!r?.reveal_phase, 
-        in_progress: r?.reveal_phase?.in_progress 
-      });
-      return;
-    }
-    console.log('[DEBUG] Current reveal phase:', r.reveal_phase);
-    r.reveal_phase.current_index++;
-    console.log('[DEBUG] Updated current_index to:', r.reveal_phase.current_index);
-    if (r.reveal_phase.current_index < r.reveal_phase.non_quitters.length) {
-      const nextId = r.reveal_phase.non_quitters[r.reveal_phase.current_index];
-      console.log('[DEBUG] Emitting next_revealing_player for:', nextId);
-      io.to(room).emit('next_revealing_player', { player_id: nextId });
-    } else {
-      console.log('[DEBUG] All players revealed, emitting reveal_complete');
-      io.to(room).emit('reveal_complete');
-      r.reveal_phase.in_progress = false;
-    }
-  });
+      // --- NEW: Handle finished_revealing event ---
+    socket.on('finished_revealing', (data) => {
+      console.log('[DEBUG] finished_revealing event received:', data);
+      const { room } = data;
+      const r = rooms[room];
+      if (!r || !r.reveal_phase || !r.reveal_phase.in_progress) {
+        console.log('[DEBUG] Invalid reveal phase state:', { 
+          room: !!r, 
+          reveal_phase: !!r?.reveal_phase, 
+          in_progress: r?.reveal_phase?.in_progress 
+        });
+        return;
+      }
+      console.log('[DEBUG] Current reveal phase:', r.reveal_phase);
+      r.reveal_phase.current_index++;
+      console.log('[DEBUG] Updated current_index to:', r.reveal_phase.current_index);
+      
+      if (r.reveal_phase.current_index < r.reveal_phase.non_quitters.length) {
+        const nextId = r.reveal_phase.non_quitters[r.reveal_phase.current_index];
+        const nextPlayer = r.players.find(p => p.id === nextId);
+        
+        console.log('[DEBUG] Emitting next_revealing_player for:', nextId, 'Player:', nextPlayer?.name);
+        io.to(room).emit('next_revealing_player', { player_id: nextId });
+      } else {
+        console.log('[DEBUG] All players revealed, emitting reveal_complete. Total players in revelation:', r.reveal_phase.non_quitters.length);
+        io.to(room).emit('reveal_complete');
+        r.reveal_phase.in_progress = false;
+        
+        // NOW check eliminations after all revelations are complete
+        updateEliminations(r);
+        
+        // Log elimination status for debugging
+        console.log('[DEBUG] Elimination check complete. Players status:');
+        r.players.forEach(p => {
+          console.log(`  - ${p.name}: eliminated=${p.eliminated}, score=${r.scores[p.id] || 0}`);
+        });
+        
+        // Check for winner immediately after eliminations
+        const activePlayers = r.players.filter(p => !p.eliminated);
+        if (activePlayers.length === 1) {
+          console.log('[DEBUG] Only one player remaining after all eliminations, ending game');
+          io.to(room).emit('game_over', { winner: activePlayers[0] });
+          return;
+        }
+      }
+    });
 
   // Reveal card during quit phase
   socket.on('reveal_card', (data) => {
@@ -460,6 +582,13 @@ io.on('connection', (socket) => {
     const player = r.players.find(p => p.id === player_id);
     if (!player || !player.hand || card_index >= player.hand.length) {
       socket.emit('error', { msg: 'Invalid card reveal.' });
+      return;
+    }
+    
+    // Check if player is eliminated
+    if (player.eliminated) {
+      console.log(`[DEBUG] Player ${player.name} is eliminated, cannot reveal cards`);
+      socket.emit('error', { msg: 'You are eliminated and cannot reveal cards.' });
       return;
     }
     
@@ -489,20 +618,35 @@ io.on('connection', (socket) => {
     // Reset game state for new round
     r.deck = shuffledDeck();
     r.center_pile = [];
-    r.turn = 0;
+    
+    // Find first non-eliminated player to start the round
+    let firstActivePlayerIdx = 0;
+    for (let i = 0; i < r.players.length; i++) {
+      if (!r.players[i].eliminated) {
+        firstActivePlayerIdx = i;
+        break;
+      }
+    }
+    r.turn = firstActivePlayerIdx;
     r.turn_start_time = Date.now();
     r.turns_taken = {};
     r.players.forEach(p => {
       r.turns_taken[p.id] = 0;
     });
     
-    // Deal 5 new cards to each player
+    // Deal 5 new cards to each NON-ELIMINATED player only
     r.players.forEach(player => {
-      player.hand = [];
-      for (let i = 0; i < 5; i++) {
-        player.hand.push(r.deck.pop());
+      if (!player.eliminated) {
+        player.hand = [];
+        for (let i = 0; i < 5; i++) {
+          player.hand.push(r.deck.pop());
+        }
+        console.log(`Dealt ${player.hand.length} cards to ${player.name}:`, player.hand);
+      } else {
+        // Clear hand for eliminated players
+        player.hand = [];
+        console.log(`${player.name} is eliminated, no cards dealt`);
       }
-      console.log(`Dealt ${player.hand.length} cards to ${player.name}:`, player.hand);
     });
     
     console.log('Emitting room_state and next_round_started');

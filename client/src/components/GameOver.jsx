@@ -2,7 +2,8 @@ import React from 'react';
 import { motion } from 'framer-motion';
 
 const GameOver = ({ winner, players = [], scores = {}, onPlayAgain, onBackToLobby }) => {
-  const sortedPlayers = [...players].sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0));
+  // Sort players by score: lowest on top, highest on bottom
+  const sortedPlayers = [...players].sort((a, b) => (scores[a.id] || 0) - (scores[b.id] || 0));
 
   return (
     <div className="min-h-screen bg-gaming-gradient flex items-center justify-center p-4">
@@ -63,44 +64,55 @@ const GameOver = ({ winner, players = [], scores = {}, onPlayAgain, onBackToLobb
           transition={{ duration: 0.6, delay: 0.6 }}
         >
           <h2 className="text-xl font-bold text-white mb-4">Final Standings</h2>
-          <div className="space-y-3">
-            {sortedPlayers.map((player, index) => (
-              <motion.div
-                key={player.id}
-                className="flex items-center justify-between p-4 bg-dark-800/50 rounded-xl"
-                initial={{ x: -50, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                transition={{ duration: 0.4, delay: 0.8 + index * 0.1 }}
-              >
-                <div className="flex items-center space-x-4">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${
-                    index === 0 ? 'bg-neon-yellow text-dark-900' :
-                    index === 1 ? 'bg-gray-400 text-dark-900' :
-                    index === 2 ? 'bg-orange-500 text-white' :
-                    'bg-dark-700 text-white'
-                  }`}>
-                    {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : index + 1}
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-gradient-to-br from-neon-blue to-neon-purple rounded-full flex items-center justify-center text-white font-bold">
-                      {player.name.charAt(0).toUpperCase()}
+          <div className="space-y-3 max-h-80 scrollable-container pr-2">
+            {sortedPlayers.map((player, index) => {
+              const playerScore = scores[player.id] || 0;
+              const isWinner = player.id === winner?.id;
+              const position = sortedPlayers.length - index; // Reverse position for correct ranking
+              
+              return (
+                <motion.div
+                  key={player.id}
+                  className="flex items-center justify-between p-4 bg-dark-800/50 rounded-xl"
+                  initial={{ x: -50, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  transition={{ duration: 0.4, delay: 0.8 + index * 0.1 }}
+                >
+                  <div className="flex items-center space-x-4">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${
+                      isWinner ? 'bg-neon-yellow text-dark-900' :
+                      position === 1 ? 'bg-neon-yellow text-dark-900' :
+                      position === 2 ? 'bg-gray-400 text-dark-900' :
+                      position === 3 ? 'bg-orange-500 text-white' :
+                      'bg-dark-700 text-white'
+                    }`}>
+                      {isWinner ? '🏆' : 
+                       position === 1 ? '🥇' : 
+                       position === 2 ? '🥈' : 
+                       position === 3 ? '🥉' : 
+                       position}
                     </div>
-                    <div>
-                      <div className="text-white font-semibold">{player.name}</div>
-                      <div className="text-white/60 text-sm">
-                        {player.id === winner?.id ? 'Winner!' : `${scores[player.id] || 0} points`}
+                    <div className="flex items-center space-x-3">
+                      <div className="w-8 h-8 bg-gradient-to-br from-neon-blue to-neon-purple rounded-full flex items-center justify-center text-white font-bold">
+                        {player.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div className="text-white font-semibold">{player.name}</div>
+                        <div className="text-white/60 text-sm">
+                          {isWinner ? 'Winner!' : `${playerScore} points`}
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-                
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-neon-blue">
-                    {scores[player.id] || 0}
+                  
+                  <div className="text-right">
+                    <div className="text-2xl font-bold text-neon-blue">
+                      {playerScore}
+                    </div>
                   </div>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              );
+            })}
           </div>
         </motion.div>
 
