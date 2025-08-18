@@ -88,7 +88,7 @@ const CreateRoom = ({ onBack, onStartGame, roomCode, players = [], isHost, onGen
                     onChange={(e) => setMaxPlayers(Number(e.target.value))}
                     className="w-full px-4 py-3 bg-dark-800 border border-white/20 rounded-xl text-white focus:outline-none focus:border-neon-blue focus:ring-2 focus:ring-neon-blue/20 transition-all"
                   >
-                    {[2, 3, 4, 5, 6].map(num => (
+                    {[2, 3, 4].map(num => (
                       <option key={num} value={num}>{num} Players</option>
                     ))}
                   </select>

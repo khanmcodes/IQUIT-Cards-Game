@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 
-const GameOver = ({ winner, players = [], scores = {}, onPlayAgain, onBackToLobby }) => {
+const GameOver = ({ winner, players = [], scores = {}, onPlayAgain, isHost = false }) => {
   // Sort players by score: lowest on top, highest on bottom
   const sortedPlayers = [...players].sort((a, b) => (scores[a.id] || 0) - (scores[b.id] || 0));
 
@@ -68,7 +68,7 @@ const GameOver = ({ winner, players = [], scores = {}, onPlayAgain, onBackToLobb
             {sortedPlayers.map((player, index) => {
               const playerScore = scores[player.id] || 0;
               const isWinner = player.id === winner?.id;
-              const position = sortedPlayers.length - index; // Reverse position for correct ranking
+              const position = index + 1; // Position 1 for lowest score, 2 for second lowest, etc.
               
               return (
                 <motion.div
@@ -87,9 +87,9 @@ const GameOver = ({ winner, players = [], scores = {}, onPlayAgain, onBackToLobb
                       'bg-dark-700 text-white'
                     }`}>
                       {isWinner ? '🏆' : 
-                       position === 1 ? '🥇' : 
-                       position === 2 ? '🥈' : 
-                       position === 3 ? '🥉' : 
+                       position === 1 ? '1' : 
+                       position === 2 ? '2' : 
+                       position === 3 ? '3' : 
                        position}
                     </div>
                     <div className="flex items-center space-x-3">
@@ -116,26 +116,23 @@ const GameOver = ({ winner, players = [], scores = {}, onPlayAgain, onBackToLobb
           </div>
         </motion.div>
 
-        {/* Action Buttons */}
+        {/* Action Area */}
         <motion.div
-          className="flex flex-col md:flex-row justify-center space-y-4 md:space-y-0 md:space-x-6"
+          className="flex flex-col items-center justify-center space-y-3"
           initial={{ y: 50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 0.6, delay: 1.2 }}
         >
-          <button
-            onClick={onPlayAgain}
-            className="px-8 py-4 bg-gradient-to-r from-neon-green to-neon-cyan text-white font-semibold rounded-xl hover:from-neon-blue hover:to-neon-purple transition-all duration-300 transform hover:scale-105 shadow-neon"
-          >
-            Play Again
-          </button>
-          
-          <button
-            onClick={onBackToLobby}
-            className="px-8 py-4 bg-glass-gradient backdrop-blur-md border border-white/20 text-white font-semibold rounded-xl hover:bg-white/10 hover:border-neon-blue transition-all duration-300 transform hover:scale-105"
-          >
-            Back to Lobby
-          </button>
+          {isHost ? (
+            <button
+              onClick={onPlayAgain}
+              className="px-8 py-4 bg-gradient-to-r from-neon-green to-neon-cyan text-white font-semibold rounded-xl hover:from-neon-blue hover:to-neon-purple transition-all duration-300 transform hover:scale-105 shadow-neon"
+            >
+              Play Again (Host)
+            </button>
+          ) : (
+            <div className="text-white/70">Waiting for host to start again…</div>
+          )}
         </motion.div>
 
         {/* Confetti Animation */}

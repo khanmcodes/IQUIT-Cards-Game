@@ -45,6 +45,12 @@ function App() {
   const [currentRevealingPlayerId, setCurrentRevealingPlayerId] = useState(null);
   const [revealComplete, setRevealComplete] = useState(false);
   const [roomData, setRoomData] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  
+  // Ref to store current quitData for event handlers
+  const quitDataRef = useRef(null);
+  
+  
 
 
   // Name entry handler
@@ -75,6 +81,7 @@ function App() {
     setDeckCount(0);
     setShowScoreboard(false);
     setQuitData(null);
+    quitDataRef.current = null;
     setGameOver(false);
     setWinner(null);
   };
@@ -160,11 +167,18 @@ function App() {
   };
 
   const handlePlayAgain = () => {
+    if (!isHost) return;
+    if (!room) return;
+    
+    // Immediately clear game over state for smooth transition
     setGameOver(false);
     setWinner(null);
-    setCurrentScreen('lobby');
+    
+    // Emit start_game to restart the game
+    socket.emit('start_game', { room });
   };
 
+	
   // Reset game state when quit data is cleared
   useEffect(() => {
     if (!quitData) {
@@ -186,6 +200,8 @@ function App() {
     socket.on('room_state', (state) => {
       console.log('Room state received:', state);
       console.log('Players:', state.players?.length, state.players?.map(p => ({ name: p.name, id: p.id, hand: p.hand?.length })));
+      console.log('Current gameOver state:', gameOver);
+      console.log('Current currentScreen:', currentScreen);
       
       // Store room data
       setRoomData(state);
@@ -224,6 +240,14 @@ function App() {
           if (quitData) {
             console.log('Clearing quit data due to new room state');
             setQuitData(null);
+            quitDataRef.current = null;
+          }
+          
+          // Clear game over state when starting a new game
+          if (gameOver) {
+            console.log('Clearing game over state due to new room state');
+            setGameOver(false);
+            setWinner(null);
           }
           
           console.log('Game state updated successfully');
@@ -237,6 +261,16 @@ function App() {
       }
     });
 
+    // Chat history for this room
+    socket.on('chat_history', (history) => {
+      setChatMessages(Array.isArray(history) ? history : []);
+    });
+
+    // Incoming chat messages
+    socket.on('chat_message', (message) => {
+      setChatMessages(prev => [...prev, message].slice(-50));
+    });
+
     socket.on('error', (data) => {
       // If there's an error joining, go back to lobby
       if (data.msg.includes('already in room') || data.msg.includes('room not found')) {
@@ -246,23 +280,35 @@ function App() {
       }
     });
 
-    socket.on('info', (data) => {
-      if (data.scores) setScores(data.scores);
-    });
-
     socket.on('quit_reveal', (data) => {
-      console.log('quit_reveal event received:', data);
-      console.log('[DEBUG] Client received quit_reveal data:', {
-        quit_player: data.quit_player,
-        all_players: data.all_players,
-        quit_result: data.quit_result
-      });
-      setQuitData({
-        quitPlayer: data.quit_player,
-        all_players: data.all_players,
-        quitResult: data.quit_result
-      });
-    });
+  console.log('quit_reveal event received:', data);
+  console.log('[DEBUG] Client received quit_reveal data:', {
+    quit_player: data.quit_player,
+    all_players: data.all_players,
+    quit_result: data.quit_result,
+    scores: data.scores
+  });
+
+  // Reset any previous reveal state to prevent premature summary display
+  setRevealComplete(false);
+  setCurrentRevealingPlayerId(null);
+
+  // Keep existing quitData format (GameScreen reads this) and store scores for later
+  const newQuitData = {
+    quitPlayer: data.quit_player,
+    all_players: data.all_players,
+    quitResult: data.quit_result,
+    pendingScores: data.scores  // Store scores to apply after revelation phase
+  };
+  setQuitData(newQuitData);
+  quitDataRef.current = newQuitData;  // Update ref immediately
+
+  if (data.scores) {
+    console.log('[DEBUG] Received scores from quit_reveal (storing in quitData for later):', data.scores);
+  }
+});
+
+
 
     socket.on('card_revealed', (data) => {
       console.log('Card revealed event received:', data);
@@ -283,6 +329,7 @@ function App() {
       console.log('next_round_started event received');
       console.log('Clearing quit data and resetting game state');
       setQuitData(null);
+      quitDataRef.current = null;
       // Reset game state for new round
       setSelectedCards([]);
       setPickSource(null);
@@ -293,9 +340,21 @@ function App() {
     });
 
     socket.on('game_over', (data) => {
+  // If a reveal/summary is in progress (we have quitData + revealComplete), delay the UI swap to allow the Round Summary to show.
+  if (revealComplete && quitData) {
+    console.log('[DEBUG] game_over received during reveal/summary — delaying UI switch so summary is visible');
+    // Delay slightly longer than the GameScreen countdown (3s) to make sure summary is visible.
+    setTimeout(() => {
       setGameOver(true);
       setWinner(data.winner);
-    });
+    }, 3500);
+  } else {
+    setGameOver(true);
+    setWinner(data.winner);
+  }
+});
+
+
 
     socket.on('kicked', (data) => {
       // Redirect to lobby when kicked
@@ -311,6 +370,7 @@ function App() {
       setDeckCount(0);
       setShowScoreboard(false);
       setQuitData(null);
+      quitDataRef.current = null;
       setGameOver(false);
       setWinner(null);
     });
@@ -322,11 +382,19 @@ function App() {
     socket.on('reveal_complete', () => {
       setRevealComplete(true);
       setCurrentRevealingPlayerId(null);
+      
+      // Now that revelation phase is complete, apply the scores from quitData
+      if (quitDataRef.current && quitDataRef.current.pendingScores) {
+        console.log('[DEBUG] Revelation complete, applying pending scores:', quitDataRef.current.pendingScores);
+        setScores(quitDataRef.current.pendingScores);
+      }
     });
 
     return () => {
       socket.off('connect');
       socket.off('room_state');
+      socket.off('chat_history');
+      socket.off('chat_message');
       socket.off('error');
       socket.off('info');
       socket.off('quit_reveal');
@@ -336,7 +404,7 @@ function App() {
       socket.off('next_revealing_player');
       socket.off('reveal_complete');
     };
-  }, [room, players]);
+  }, [room, players, revealComplete, quitData]);
 
 
 
@@ -515,6 +583,8 @@ function App() {
             currentRevealingPlayerId={currentRevealingPlayerId}
             revealComplete={revealComplete}
             onFinishRevealing={() => socket.emit('finished_revealing', { room })}
+            chatMessages={chatMessages}
+            onSendChat={(text) => socket.emit('chat_message', { room, text })}
           />
         )}
 
@@ -525,7 +595,7 @@ function App() {
             players={players}
             scores={scores}
             onPlayAgain={handlePlayAgain}
-            onBackToLobby={handleBackToLobby}
+            isHost={isHost}
           />
         )}
         
