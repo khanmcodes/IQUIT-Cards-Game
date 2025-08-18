@@ -167,7 +167,8 @@ io.on('connection', (socket) => {
       turn: 0,
       scores: {},
       turn_start_time: Date.now(),
-      eliminationScore: parseInt(eliminationScore) || 100
+      eliminationScore: parseInt(eliminationScore) || 100,
+      chat: []
     };
     
     if (!rooms[room].turns_taken) {
@@ -179,6 +180,8 @@ io.on('connection', (socket) => {
     
     socket.join(room);
     socket.emit('room_state', addHostProperty(rooms[room]));
+    // Send initial (empty) chat history to the creator
+    socket.emit('chat_history', rooms[room].chat || []);
   });
 
     // Join an existing room
@@ -204,8 +207,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Check if room is full (assuming max 6 players)
-    if (rooms[room].players.length >= 6) {
+    // Check if room is full (max 4 players)
+    if (rooms[room].players.length >= 4) {
       socket.emit('error', { msg: 'Room is full.' });
       return;
     }
@@ -224,6 +227,8 @@ io.on('connection', (socket) => {
     socket.join(room);
     // Send updated room state to all players
     io.to(room).emit('room_state', addHostProperty(rooms[room]));
+    // Send chat history to the newly joined player
+    socket.emit('chat_history', rooms[room].chat || []);
   });
 
   // Start the game: deal 5 cards each
@@ -235,6 +240,13 @@ io.on('connection', (socket) => {
     if (!r) {
       console.log('Room not found:', room);
       socket.emit('error', { msg: 'Room not found.' });
+      return;
+    }
+    // Only host (first player) can start the game
+    const host = r.players && r.players[0];
+    if (!host || host.id !== socket.id) {
+      console.log('Start game denied: not host');
+      socket.emit('error', { msg: 'Only the host can start the game.' });
       return;
     }
     
@@ -256,7 +268,7 @@ io.on('connection', (socket) => {
       console.log(`Dealt ${player.hand.length} cards to ${player.name}:`, player.hand);
     });
     
-    // Initialize scores
+    // Always reset scores to 0 for new games
     r.players.forEach(p => {
       r.scores[p.id] = 0;
     });
@@ -269,7 +281,13 @@ io.on('connection', (socket) => {
       r.turns_taken[p.id] = 0;
     });
     
-    console.log('Emitting room_state with game started');
+    // Clear any quit/reveal state
+    r.reveal_phase = null;
+    
+    console.log('Game state reset complete. Emitting room_state to all players in room:', room);
+    console.log('Players with hands:', r.players.map(p => ({ name: p.name, handLength: p.hand?.length || 0 })));
+    console.log('Scores reset to:', r.scores);
+    
     io.to(room).emit('room_state', addHostProperty(r));
   });
 
@@ -477,18 +495,16 @@ io.on('connection', (socket) => {
     
     // Send quit reveal data with all player hands for animation
     const quit_reveal_data = {
-      quit_player: player,
-      all_players: r.players.map(p => ({
-        ...p,
-        hand: [...p.hand] // Capture hands at the time of quit
-      })),
-      quit_result: {
-        success: others_vals.every(v => my_val < v),
-        message: msg
-      }
-    };
+  quit_player: player,
+  all_players: r.players.map(p => ({ ...p, hand: [...p.hand] })),
+  quit_result: {
+    success: others_vals.every(v => my_val < v),
+    message: msg
+  },
+  scores: r.scores  // <-- ADD THIS LINE (authoritative scores after processing the quit)
+};
     
-    console.log('[DEBUG] Server sending quit_reveal data:', quit_reveal_data);
+    console.log('[DEBUG] Server sending quit_reveal data (incl. scores):', quit_reveal_data);
     console.log('[DEBUG] Current player status before revelation:');
     r.players.forEach(p => {
       console.log(`  - ${p.name}: eliminated=${p.eliminated}, score=${r.scores[p.id] || 0}`);
@@ -693,11 +709,12 @@ io.on('connection', (socket) => {
     // Remove player from room
     r.players = r.players.filter(p => p.id !== player_id);
     
-    // Notify the kicked player
-    io.to(player_id).emit('kicked', { msg: 'You have been kicked from the room.' });
-    
-    // Remove kicked player from socket room
-    socket.to(player_id).leave(room);
+    // Remove kicked player from socket room and notify them
+    const kickedSocket = io.sockets.sockets.get(player_id);
+    if (kickedSocket) {
+      kickedSocket.leave(room);
+      kickedSocket.emit('kicked', { msg: 'You have been kicked from the room.' });
+    }
     
     // Update room state for remaining players
     io.to(room).emit('room_state', addHostProperty(r));
@@ -714,6 +731,41 @@ io.on('connection', (socket) => {
     const { room, target, signal } = data;
     // Relay the signal to the target user in the room
     socket.to(target).emit('voice-signal', { from: socket.id, signal });
+  });
+
+  // Chat message handling
+  socket.on('chat_message', (data) => {
+    const { room, text } = data || {};
+    const r = rooms[room];
+    if (!r) {
+      socket.emit('error', { msg: 'Room not found.' });
+      return;
+    }
+    const trimmed = (text || '').toString().trim();
+    if (!trimmed) return;
+
+    // Ensure sender is part of the room
+    const player = r.players.find(p => p.id === socket.id);
+    if (!player) {
+      socket.emit('error', { msg: 'You are not part of this room.' });
+      return;
+    }
+
+    const message = {
+      id: socket.id,
+      name: player.name,
+      text: trimmed,
+      timestamp: Date.now()
+    };
+
+    if (!Array.isArray(r.chat)) r.chat = [];
+    r.chat.push(message);
+    // Keep only the last 50 messages
+    if (r.chat.length > 50) {
+      r.chat = r.chat.slice(-50);
+    }
+
+    io.to(room).emit('chat_message', message);
   });
 
   // Handle disconnection

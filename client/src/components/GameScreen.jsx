@@ -30,6 +30,8 @@ const GameScreen = ({
   currentRevealingPlayerId = null,
   revealComplete = false,
   onFinishRevealing = null,
+  chatMessages = [],
+  onSendChat,
 }) => {
   const [showChat, setShowChat] = useState(false);
   const [showDiscardModal, setShowDiscardModal] = useState(false);
@@ -48,11 +50,31 @@ const GameScreen = ({
   const [isCurrentPlayerTurn, setIsCurrentPlayerTurn] = useState(false);
   const [quitPlayerRevealed, setQuitPlayerRevealed] = useState(false);
   const [playerScores, setPlayerScores] = useState({});
+  const [chatInput, setChatInput] = useState('');
+  const [ephemeralMessage, setEphemeralMessage] = useState(null);
+  const chatScrollRef = React.useRef(null);
 
   // Debug modal state
   useEffect(() => {
     console.log("showDiscardModal changed to:", showDiscardModal);
   }, [showDiscardModal]);
+
+  // Ephemeral in-game message popups when someone chats
+  useEffect(() => {
+    if (!chatMessages || chatMessages.length === 0) return;
+    const last = chatMessages[chatMessages.length - 1];
+    if (!last) return;
+    setEphemeralMessage(last);
+    const t = setTimeout(() => setEphemeralMessage(null), 3000);
+    return () => clearTimeout(t);
+  }, [chatMessages]);
+
+  // Auto-scroll chat panel to bottom when messages update
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatMessages, showChat]);
 
   // Track quitData changes
   useEffect(() => {
@@ -149,8 +171,8 @@ const GameScreen = ({
           
           const quitPlayerScore = quitPlayerCards.reduce((total, card) => {
             if (card.rank === 'J') return total + 0;
-            if (card.rank === 'K') return total + 13;
-            if (card.rank === 'Q') return total + 12;
+            if (card.rank === 'K') return total + 20;
+            if (card.rank === 'Q') return total + 20;
             if (card.rank === 'A') return total + 1;
             return total + (parseInt(card.rank) || 0);
           }, 0);
@@ -227,8 +249,8 @@ const GameScreen = ({
           
           const playerScore = playerCards.reduce((total, card) => {
             if (card.rank === 'J') return total + 0;
-            if (card.rank === 'K') return total + 13;
-            if (card.rank === 'Q') return total + 12;
+            if (card.rank === 'K') return total + 20;
+            if (card.rank === 'Q') return total + 20;
             if (card.rank === 'A') return total + 1;
             return total + (parseInt(card.rank) || 0);
           }, 0);
@@ -330,21 +352,44 @@ const GameScreen = ({
   }, [revealComplete, quitData]);
 
   // Always set quitPhase to 'revealing' and reset per-player state for each new currentRevealingPlayerId (except for the quitter's auto-reveal)
-  useEffect(() => {
-    console.log('[DEBUG] useEffect: currentRevealingPlayerId changed:', currentRevealingPlayerId, 'quitPhase:', quitPhase, 'client:', currentPlayer?.name);
-    if (
-      quitData &&
-      currentRevealingPlayerId &&
-      quitData.quitPlayer.id !== currentRevealingPlayerId
-    ) {
-      setQuitPhase('revealing');
-      setManualRevealMode(false);
-      setPlayerTimeout(null);
-      setTimeoutSeconds(30);
-      setIsCurrentPlayerTurn(currentRevealingPlayerId === currentPlayer?.id);
-      setAutoRevealIndex(0);
-    }
-  }, [quitData, currentRevealingPlayerId, currentPlayer]);
+  // Guarded transition: only switch into 'revealing' for non-quitters
+// AFTER the quit player's auto-reveal has completed (quitPlayerRevealed === true).
+useEffect(() => {
+  console.log(
+    '[DEBUG] useEffect: currentRevealingPlayerId changed:',
+    currentRevealingPlayerId,
+    'quitPhase:', quitPhase,
+    'quitPlayerRevealed:', quitPlayerRevealed,
+    'client:', currentPlayer?.name
+  );
+
+  // Only act when we have quitData and a valid current revealing player
+  if (!quitData || !currentRevealingPlayerId) return;
+
+  // If the current revealing player is the quitter, don't force the 'revealing' phase here
+  if (quitData.quitPlayer && quitData.quitPlayer.id === currentRevealingPlayerId) {
+    // This case should be handled by the quit-reveal flow already (auto-revealing the quitter)
+    return;
+  }
+
+  // Only transition into the 'revealing' phase once the quitter has been fully revealed.
+  // This prevents the UI from briefly showing a non-quitter as "is revealing..." while
+  // the quitter's auto-reveal/iquit animation is still playing.
+  if (!quitPlayerRevealed) {
+    console.log('[DEBUG] Ignoring next_revealing_player until quitter reveal completes');
+    return;
+  }
+
+  // OK — quitter done, now start per-player reveal phase for the currentRevealingPlayerId
+  setQuitPhase('revealing');
+  setManualRevealMode(false);
+  setPlayerTimeout(null);
+  setTimeoutSeconds(30);
+  setIsCurrentPlayerTurn(currentRevealingPlayerId === currentPlayer?.id);
+  setAutoRevealIndex(0);
+
+}, [quitData, currentRevealingPlayerId, currentPlayer, quitPlayerRevealed, quitPhase]);
+
 
   const handleRevealCard = (playerId, cardIndex) => {
     console.log('[DEBUG] handleRevealCard called:', {
@@ -391,8 +436,8 @@ const GameScreen = ({
               // Calculate and store the player's score
               const playerScore = playerCards.reduce((total, card) => {
                 if (card.rank === 'J') return total + 0;
-                if (card.rank === 'K') return total + 13;
-                if (card.rank === 'Q') return total + 12;
+                if (card.rank === 'K') return total + 20;
+                if (card.rank === 'Q') return total + 20;
                 if (card.rank === 'A') return total + 1;
                 return total + (parseInt(card.rank) || 0);
               }, 0);
@@ -471,6 +516,24 @@ const GameScreen = ({
 
   const positions = getPlayerPositions();
 
+  const getEphemeralPositionClass = () => {
+    if (!ephemeralMessage) return '';
+    const senderId = ephemeralMessage.id;
+    if (currentPlayer?.id === senderId) {
+      return 'bottom-40 left-1/2 -translate-x-1/2';
+    }
+    if (positions.top?.some(p => p.id === senderId)) {
+      return 'top-24 left-1/2 -translate-x-1/2';
+    }
+    if (positions.left?.some(p => p.id === senderId)) {
+      return 'top-1/2 -translate-y-1/2 left-6';
+    }
+    if (positions.right?.some(p => p.id === senderId)) {
+      return 'top-1/2 -translate-y-1/2 right-6';
+    }
+    return 'top-24 left-1/2 -translate-x-1/2';
+  };
+
   // Debug logging
   console.log('[DEBUG] GameScreen render:', {
     currentPlayer: currentPlayer?.name,
@@ -494,6 +557,13 @@ const GameScreen = ({
   const handleCenterPileCardSelect = (cardIndex) => {
     onPickFromDiscard(cardIndex);
     setShowDiscardModal(false);
+  };
+
+  const handleChatSend = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    if (onSendChat) onSendChat(text);
+    setChatInput('');
   };
 
   // Render quit phase content
@@ -592,27 +662,7 @@ const GameScreen = ({
               </div>
               
               {/* Show quit player's total score when all cards are revealed */}
-              {revealedCards[quitData.quitPlayer.id]?.length === (quitData.all_players.find(p => p.id === quitData.quitPlayer.id)?.hand || []).length && (
-                <motion.div
-                  className="mt-4 p-4 bg-red-900/20 border border-red-500/30 rounded-lg"
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.5 }}
-                >
-                  <div className="text-lg text-white font-semibold">
-                    {quitData.quitPlayer.name}'s total hand value: 
-                    <span className="text-red-400 font-bold ml-2">
-                      {quitData.quitPlayer.hand?.reduce((total, card) => {
-                        const faceVal = {
-                          'A': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9,
-                          '10': 10, 'J': 0, 'Q': 20, 'K': 20
-                        };
-                        return total + faceVal[card.rank];
-                      }, 0) || 0}
-                    </span>
-                  </div>
-                </motion.div>
-              )}
+
             </div>
           </motion.div>
         );
@@ -747,21 +797,7 @@ const GameScreen = ({
                   })}
                 </div>
                 {/* Show current player's total score when all cards are revealed */}
-                {revealedCards[currentRevealingPlayerId]?.length === (quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.hand || []).length && (
-                  <motion.div
-                    className="mt-4 p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg"
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.5 }}
-                  >
-                    <div className="text-lg text-white font-semibold">
-                      {quitData.all_players.find(p => p.id === currentRevealingPlayerId)?.name}'s total hand value: 
-                      <span className="text-blue-400 font-bold ml-2">
-                        {playerScores[currentRevealingPlayerId] || 0}
-                      </span>
-                    </div>
-                  </motion.div>
-                )}
+
               </div>
             )}
           </motion.div>
@@ -897,7 +933,7 @@ const GameScreen = ({
       {/* Main Game Area */}
       <div className="relative h-[95%] m-4 flex items-center justify-center bg-graydiant rounded-[2.5rem]">
         <motion.div
-          className="fixed top-5 left-0 right-0 z-30 px-8 py-3 md:px-6 md:py-4"
+          className="fixed top-0 left-0 right-0 z-30 px-8 py-3 md:px-6 md:py-4"
           initial={{ y: -100 }}
           animate={{ y: 0 }}
           transition={{ duration: 0.5 }}
@@ -974,6 +1010,21 @@ const GameScreen = ({
           {/* Normal Game Content - Hidden during quit phases */}
           {!quitPhase && (
             <>
+              {/* Ephemeral chat popup near speaking player's avatar */}
+              <AnimatePresence>
+                {ephemeralMessage && (
+                  <motion.div
+                    className={`absolute ${getEphemeralPositionClass()} z-30 px-3 py-2 bg-black/70 text-white rounded-xl border border-white/10 shadow-lg max-w-[70%]`}
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <span className="font-bold mr-2">{ephemeralMessage.name}:</span>
+                    <span>{ephemeralMessage.text}</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
               {/* Opponent Players - Responsive Layout */}
               <div className="absolute inset-2 pointer-events-none">
                 {/* Top Players */}
@@ -1035,7 +1086,7 @@ const GameScreen = ({
               </div>
               {/* Center Game Area - Mobile Optimized */}
               <motion.div
-                className="absolute top-[40%] left-1/2 right-1/2 transform -translate-x-1/2 -translate-y-1/2 z-5 pointer-events-auto"
+                className="absolute top-[37.5%] left-1/2 right-1/2 transform -translate-x-1/2 -translate-y-1/2 z-5 pointer-events-auto"
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ duration: 0.5, delay: 0.3 }}
@@ -1232,7 +1283,7 @@ const GameScreen = ({
                       <motion.div
                         className="text-white/60 text-center py-6 md:py-8"
                         initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
+                        animate={{ opacity: 1, y: 40 }}
                         transition={{ duration: 0.5 }}
                       >
                         <motion.div
@@ -1398,14 +1449,24 @@ const GameScreen = ({
                 ×
               </button>
             </div>
-            <div className="h-48 md:h-64 bg-dark-800 rounded-lg p-2 md:p-3 mb-2 md:mb-3 overflow-y-auto">
-              <div className="text-white/60 text-xs md:text-sm">
-                Chat coming soon...
-              </div>
+            <div ref={chatScrollRef} className="h-48 md:h-64 bg-dark-800 rounded-lg p-2 md:p-3 mb-2 md:mb-3 overflow-y-auto space-y-1">
+              {chatMessages && chatMessages.length > 0 ? (
+                chatMessages.map((m, idx) => (
+                  <div key={idx} className="text-white/90 text-xs md:text-sm">
+                    <span className="font-bold mr-1">{m.name}:</span>
+                    <span className="break-words">{m.text}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="text-white/60 text-xs md:text-sm">No messages yet</div>
+              )}
             </div>
             <input
               type="text"
               placeholder="Type a message..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleChatSend(); }}
               className="w-full px-2 py-1.5 md:px-3 md:py-2 bg-dark-800 border border-white/20 rounded-lg text-white placeholder-white/40 focus:outline-none focus:border-neon-blue text-xs md:text-sm"
             />
           </motion.div>
