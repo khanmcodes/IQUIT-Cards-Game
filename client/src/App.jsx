@@ -11,7 +11,9 @@ import JoinRoom from './components/JoinRoom';
 import GameScreen from './components/GameScreen';
 import GameOver from './components/GameOver';
 
-const socket = io('http://localhost:5001');
+// Use environment variable for socket URL, fallback to localhost for development
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001';
+const socket = io(SOCKET_URL);
 
 function App() {
   // App state
